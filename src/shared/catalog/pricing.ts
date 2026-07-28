@@ -3,18 +3,20 @@ import type { ReusableProductCategory } from '../contracts/catalog';
 export const DEFAULT_PERSONALIZATION_BASIS_POINTS = 500;
 
 export interface PricingSummaryInput {
-  supplierUnitCostCents: number;
+  cashPriceCents: number;
+  listPriceCents: number;
   profitPercentageBasisPoints: number;
   personalizationAmountCents?: number | null;
   personalizationPercentageBasisPoints?: number | null;
 }
 
 export interface PricingSummary {
-  expectedProfitCents: number;
-  suggestedPriceCents: number;
+  cashExpectedProfitCents: number;
+  listExpectedProfitCents: number;
   personalizationPercentageBasisPoints: number | null;
   personalizationExpectedProfitCents: number | null;
-  totalExpectedProfitCents: number;
+  cashTotalExpectedProfitCents: number;
+  listTotalExpectedProfitCents: number;
 }
 
 export function calculateExpectedProfitCents(amountCents: number, basisPoints: number): number {
@@ -33,24 +35,23 @@ export function isPersonalizationAllowed(category: ReusableProductCategory): boo
 }
 
 export function calculatePricingSummary({
-  supplierUnitCostCents,
+  cashPriceCents,
+  listPriceCents,
   profitPercentageBasisPoints,
   personalizationAmountCents,
   personalizationPercentageBasisPoints
 }: PricingSummaryInput): PricingSummary {
-  const expectedProfitCents = calculateExpectedProfitCents(
-    supplierUnitCostCents,
-    profitPercentageBasisPoints
-  );
-  const suggestedPriceCents = supplierUnitCostCents + expectedProfitCents;
+  const cashExpectedProfitCents = calculateExpectedProfitCents(cashPriceCents, profitPercentageBasisPoints);
+  const listExpectedProfitCents = calculateExpectedProfitCents(listPriceCents, profitPercentageBasisPoints);
 
   if (personalizationAmountCents == null) {
     return {
-      expectedProfitCents,
-      suggestedPriceCents,
+      cashExpectedProfitCents,
+      listExpectedProfitCents,
       personalizationPercentageBasisPoints: null,
       personalizationExpectedProfitCents: null,
-      totalExpectedProfitCents: expectedProfitCents
+      cashTotalExpectedProfitCents: cashExpectedProfitCents,
+      listTotalExpectedProfitCents: listExpectedProfitCents
     };
   }
 
@@ -62,10 +63,11 @@ export function calculatePricingSummary({
   );
 
   return {
-    expectedProfitCents,
-    suggestedPriceCents,
+    cashExpectedProfitCents,
+    listExpectedProfitCents,
     personalizationPercentageBasisPoints: resolvedPersonalizationBasisPoints,
     personalizationExpectedProfitCents,
-    totalExpectedProfitCents: expectedProfitCents + personalizationExpectedProfitCents
+    cashTotalExpectedProfitCents: cashExpectedProfitCents + personalizationExpectedProfitCents,
+    listTotalExpectedProfitCents: listExpectedProfitCents + personalizationExpectedProfitCents
   };
 }

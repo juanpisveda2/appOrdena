@@ -41,7 +41,7 @@ export async function exportConsignmentBatchExcel(
     defaultPath: buildConsignmentBatchFileName(detail.batchNumber, detail.liquidationDate),
     filters: [
       {
-        name: 'Excel Workbook',
+        name: 'Libro de Excel',
         extensions: ['xlsx']
       }
     ]
@@ -65,7 +65,7 @@ export async function exportConsignmentBatchExcel(
     operationType: 'consignment_batch_excel_exported',
     entityType: 'consignment_batch',
     entityId: String(detail.batchId),
-    summary: `Generated liquidation Excel receipt ${basename(dialogResult.filePath)} for batch #${detail.batchNumber}.`,
+    summary: `Generamos el comprobante Excel de liquidación ${basename(dialogResult.filePath)} para el lote #${detail.batchNumber}.`,
     detailJson: JSON.stringify({
       batchId: detail.batchId,
       batchNumber: detail.batchNumber,

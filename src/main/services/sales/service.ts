@@ -46,7 +46,6 @@ interface ProductPricingRow {
   variant: string;
   currentCashPriceCents: number | null;
   currentListPriceCents: number | null;
-  currentExpectedProfitCents: number | null;
 }
 
 interface ResolvedCustomerSnapshot {
@@ -250,13 +249,6 @@ export function confirmSaleDraft(
             ORDER BY si.intake_date DESC, si.id DESC
             LIMIT 1
           ) AS currentListPriceCents
-          ,(
-            SELECT si.expected_profit_cents
-            FROM stock_intakes si
-            WHERE si.reusable_product_id = rp.id
-            ORDER BY si.intake_date DESC, si.id DESC
-            LIMIT 1
-          ) AS currentExpectedProfitCents
         FROM reusable_products rp
         WHERE rp.id = ? AND rp.deleted_at IS NULL
         LIMIT 1
@@ -918,6 +910,7 @@ function resolveSaleItemPersonalizationPercentage(
 function calculateHistoricalSaleItemFinancials(
   item: {
     quantity: number;
+    priceType: SalePriceType;
     unitPersonalizationExpectedProfitCents: number | null;
   },
   allocations: Array<Omit<SaleItemAllocationSnapshot, 'allocationId' | 'allocationOrder'>>
@@ -925,9 +918,11 @@ function calculateHistoricalSaleItemFinancials(
   const productGainCents = allocations.reduce(
     (sum, allocation) =>
       sum +
-      allocation.consumedQuantity *
+        allocation.consumedQuantity *
         calculateExpectedProfitCents(
-          allocation.historicalSupplierUnitCostCents,
+          item.priceType === 'cash'
+            ? allocation.historicalCashPriceCents
+            : allocation.historicalListPriceCents,
           allocation.historicalProfitPercentageBasisPoints
         ),
     0

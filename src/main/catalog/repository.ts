@@ -41,7 +41,8 @@ interface ProductDetailRow {
   currentCashPriceCents: number | null;
   currentListPriceCents: number | null;
   currentProfitPercentageBasisPoints: number | null;
-  currentExpectedProfitCents: number | null;
+  currentCashExpectedProfitCents: number | null;
+  currentListExpectedProfitCents: number | null;
   currentPersonalizationExpectedProfitCents: number | null;
 }
 
@@ -53,7 +54,8 @@ interface ProductRecentIntakeRow {
   cashPriceCents: number;
   listPriceCents: number;
   profitPercentageBasisPoints: number;
-  expectedProfitCents: number;
+  cashExpectedProfitCents: number;
+  listExpectedProfitCents: number;
   personalizationAmountCents: number | null;
   personalizationPercentageBasisPoints: number | null;
   personalizationExpectedProfitCents: number | null;
@@ -384,7 +386,14 @@ export function getCatalogProductDetail(
           WHERE si_latest.reusable_product_id = rp.id
           ORDER BY si_latest.intake_date DESC, si_latest.id DESC
           LIMIT 1
-        ) AS currentExpectedProfitCents,
+        ) AS currentCashExpectedProfitCents,
+        (
+          SELECT si_latest.expected_list_profit_cents
+          FROM stock_intakes si_latest
+          WHERE si_latest.reusable_product_id = rp.id
+          ORDER BY si_latest.intake_date DESC, si_latest.id DESC
+          LIMIT 1
+        ) AS currentListExpectedProfitCents,
         (
           SELECT si_latest.personalization_expected_profit_cents
           FROM stock_intakes si_latest
@@ -415,7 +424,8 @@ export function getCatalogProductDetail(
         si.cash_price_cents AS cashPriceCents,
         si.list_price_cents AS listPriceCents,
         si.profit_percentage_basis_points AS profitPercentageBasisPoints,
-        si.expected_profit_cents AS expectedProfitCents,
+        si.expected_profit_cents AS cashExpectedProfitCents,
+        si.expected_list_profit_cents AS listExpectedProfitCents,
         si.personalization_amount_cents AS personalizationAmountCents,
         si.personalization_percentage_basis_points AS personalizationPercentageBasisPoints,
         si.personalization_expected_profit_cents AS personalizationExpectedProfitCents,
@@ -433,16 +443,22 @@ export function getCatalogProductDetail(
   ) as ProductRecentIntakeRow[];
   const recentIntakes: CatalogProductRecentIntake[] = recentIntakeRows.map((row) => ({
     ...row,
-    totalExpectedProfitCents:
-      row.expectedProfitCents + (row.personalizationExpectedProfitCents ?? 0)
+    cashTotalExpectedProfitCents:
+      row.cashExpectedProfitCents + (row.personalizationExpectedProfitCents ?? 0),
+    listTotalExpectedProfitCents:
+      row.listExpectedProfitCents + (row.personalizationExpectedProfitCents ?? 0)
   }));
 
   return {
     ...detailRow,
-    currentTotalExpectedProfitCents:
-      detailRow.currentExpectedProfitCents == null
+    currentCashTotalExpectedProfitCents:
+      detailRow.currentCashExpectedProfitCents == null
         ? null
-        : detailRow.currentExpectedProfitCents + (detailRow.currentPersonalizationExpectedProfitCents ?? 0),
+        : detailRow.currentCashExpectedProfitCents + (detailRow.currentPersonalizationExpectedProfitCents ?? 0),
+    currentListTotalExpectedProfitCents:
+      detailRow.currentListExpectedProfitCents == null
+        ? null
+        : detailRow.currentListExpectedProfitCents + (detailRow.currentPersonalizationExpectedProfitCents ?? 0),
     recentIntakes
   };
 }

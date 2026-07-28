@@ -31,7 +31,8 @@ export function saveStockIntake(
   const newReusableProduct = payload.newReusableProduct;
 
   const pricingSummary = calculatePricingSummary({
-    supplierUnitCostCents: payload.supplierUnitCostCents,
+    cashPriceCents: payload.cashPriceCents,
+    listPriceCents: payload.listPriceCents,
     profitPercentageBasisPoints: payload.profitPercentageBasisPoints
   });
 
@@ -56,12 +57,13 @@ export function saveStockIntake(
           list_price_cents,
           profit_percentage_basis_points,
           expected_profit_cents,
+          expected_list_profit_cents,
           personalization_amount_cents,
           personalization_percentage_basis_points,
           personalization_expected_profit_cents,
           intake_date,
           notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `
     );
     const result = statement.run(
@@ -72,7 +74,8 @@ export function saveStockIntake(
       payload.cashPriceCents,
       payload.listPriceCents,
       payload.profitPercentageBasisPoints,
-      pricingSummary.expectedProfitCents,
+      pricingSummary.cashExpectedProfitCents,
+      pricingSummary.listExpectedProfitCents,
       null,
       null,
       null,

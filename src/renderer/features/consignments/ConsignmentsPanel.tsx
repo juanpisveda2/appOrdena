@@ -31,6 +31,8 @@ interface ConsignmentsPanelProps {
 
 type View = 'pending' | 'history' | 'detail';
 
+type StageTone = 'current' | 'complete' | 'idle';
+
 export function ConsignmentsPanel({ bridge, onBack, initialState }: ConsignmentsPanelProps): JSX.Element {
   const [view, setView] = useState<View>(initialState?.view ?? 'pending');
   const [pendingItems, setPendingItems] = useState<PendingConsignmentItem[]>(initialState?.pendingItems ?? []);
@@ -53,6 +55,8 @@ export function ConsignmentsPanel({ bridge, onBack, initialState }: Consignments
     () => summarizeSelection({ pendingItems, historyItems, detail, selectedIds, liquidationDate, notes, successBatch, statusMessage }),
     [pendingItems, historyItems, detail, selectedIds, liquidationDate, notes, successBatch, statusMessage]
   );
+  const warningItems = selectedSummary.partialItems;
+  const stages = buildStages({ view, showConfirmBlock, successBatch });
 
   useEffect(() => {
     void loadPending();
@@ -165,10 +169,10 @@ export function ConsignmentsPanel({ bridge, onBack, initialState }: Consignments
         description="Liquidá artículos pendientes y consultá el historial sin perder la trazabilidad."
         actions={
           <>
-            <Button type="button" variant={view === 'pending' ? 'primary' : 'secondary'} onClick={() => setView('pending')}>
+            <Button type="button" variant="nav" active={view === 'pending'} onClick={() => setView('pending')}>
               Pendientes
             </Button>
-            <Button type="button" variant={view === 'history' ? 'primary' : 'secondary'} onClick={() => void openHistory()}>
+            <Button type="button" variant="nav" active={view === 'history'} onClick={() => void openHistory()}>
               Historial
             </Button>
             {onBack ? (
@@ -180,29 +184,44 @@ export function ConsignmentsPanel({ bridge, onBack, initialState }: Consignments
         }
       />
 
+      <Surface className="consignments-stages" aria-label="etapas-liquidaciones">
+        {stages.map((stage, index) => (
+          <div className={`consignments-stage consignments-stage--${stage.tone}`} key={stage.label}>
+            <span className="consignments-stage__index">{index + 1}</span>
+            <div>
+              <p className="consignments-stage__label">{stage.label}</p>
+              <p className="consignments-stage__hint">{stage.hint}</p>
+            </div>
+          </div>
+        ))}
+      </Surface>
+
       {statusMessage ? <Banner tone={statusKind === 'error' ? 'error' : statusKind === 'info' ? 'info' : 'success'} role="status" message={statusMessage} /> : null}
 
       {successBatch ? (
-        <Surface tone="soft" aria-label="resultado-liquidacion">
-          <h3 className="surface__title">Liquidación confirmada</h3>
-          <dl className="data-list">
-            <dt>Número de liquidación</dt>
-            <dd>{successBatch.batchNumber}</dd>
-            <dt>Cantidad de artículos</dt>
-            <dd>{successBatch.itemCount}</dd>
-            <dt>Total al proveedor</dt>
-            <dd>{formatCurrencyFromCents(successBatch.totalCents)}</dd>
-            <dt>Ganancia total</dt>
-            <dd>{formatCurrencyFromCents(successBatch.totalGainCents)}</dd>
-          </dl>
-          <div className="actions" style={{ marginTop: 16 }}>
+        <Surface tone="soft" aria-label="resultado-liquidacion" className="consignments-result">
+          <div className="consignments-result__header">
+            <div>
+              <h3 className="surface__title">Resultado de la liquidación</h3>
+              <p className="surface__description">La liquidación #{successBatch.batchNumber} ya quedó registrada y lista para exportar.</p>
+            </div>
+            <Badge tone="success">Confirmada</Badge>
+          </div>
+          <div className="consignments-summary-grid">
+            <SummaryCard label="Liquidación" value={`#${successBatch.batchNumber}`} />
+            <SummaryCard label="Artículos" value={String(successBatch.itemCount)} />
+            <SummaryCard label="Importe a pagar ahora" value={formatCurrencyFromCents(successBatch.totalCents)} />
+            <SummaryCard label="Saldo proveedor después de liquidar" value={formatCurrencyFromCents(successBatch.remainingCents)} />
+            <SummaryCard label="Ganancia" value={formatCurrencyFromCents(successBatch.totalGainCents)} />
+          </div>
+          <div className="actions consignments-result__actions">
             <Button
               type="button"
               variant="success"
               onClick={() => void exportBatchExcel(successBatch.batchId)}
               disabled={exportingBatchId === successBatch.batchId}
             >
-              {exportingBatchId === successBatch.batchId ? 'Generando…' : 'Exportar comprobante Excel'}
+              {exportingBatchId === successBatch.batchId ? 'Generando…' : 'Exportar liquidación'}
             </Button>
           </div>
         </Surface>
@@ -214,20 +233,23 @@ export function ConsignmentsPanel({ bridge, onBack, initialState }: Consignments
             <div className="page-header">
               <div>
                 <h3 className="surface__title">Pendientes de liquidación</h3>
-                <p className="surface__description">
-                  Seleccionados: <strong>{selectedSummary.count}</strong> · Total al proveedor:{' '}
-                  <strong>{formatCurrencyFromCents(selectedSummary.totalCents)}</strong> · Ganancia:{' '}
-                  <strong>{formatCurrencyFromCents(selectedSummary.totalGainCents)}</strong>
-                </p>
+                <p className="surface__description">Seleccioná artículos para pasar a revisión antes de confirmar la liquidación.</p>
               </div>
               <div className="actions">
                 <Button type="button" variant="secondary" onClick={() => void loadPending()}>
                   Actualizar
                 </Button>
                 <Button type="button" variant={selectedSummary.count === 0 ? 'secondary' : 'success'} disabled={selectedSummary.count === 0} onClick={() => setShowConfirmBlock(true)}>
-                  Confirmar liquidación
+                  Revisar liquidación
                 </Button>
               </div>
+            </div>
+
+            <div className="consignments-summary-grid">
+              <SummaryCard label="Seleccionados" value={String(selectedSummary.count)} />
+              <SummaryCard label="Importe a pagar ahora" value={formatCurrencyFromCents(selectedSummary.totalCents)} />
+              <SummaryCard label="Saldo pendiente con el proveedor" value={formatCurrencyFromCents(selectedSummary.remainingCents)} />
+              <SummaryCard label="Ganancia" value={formatCurrencyFromCents(selectedSummary.totalGainCents)} />
             </div>
 
             {loadingPending ? <Banner tone="info" message="Cargando pendientes…" /> : null}
@@ -236,23 +258,30 @@ export function ConsignmentsPanel({ bridge, onBack, initialState }: Consignments
             ) : null}
 
             {pendingItems.length > 0 ? (
-              <ul className="list" style={{ marginTop: 16 }}>
+              <ul className="list consignments-list-spaced">
                 {pendingItems.map((item) => {
                   const checked = selectedIds.includes(item.saleItemId);
 
                   return (
-                    <li className={`list-row ${checked ? 'list-row--selected' : ''}`} key={item.saleItemId}>
-                      <label className="cluster" style={{ alignItems: 'flex-start', cursor: 'pointer', width: '100%' }}>
+                    <li className={`list-row consignments-pending-row ${checked ? 'list-row--selected' : ''}`} key={item.saleItemId}>
+                      <label className="consignments-pending-row__label" style={{ cursor: 'pointer', width: '100%' }}>
                         <input type="checkbox" checked={checked} onChange={() => toggleSelection(item.saleItemId)} aria-label={`Seleccionar ${item.productName}`} />
                         <div className="list-row__content">
-                          <div className="cluster">
-                            <p className="list-row__title">{item.productName}</p>
-                            <Badge tone={checked ? 'info' : 'neutral'}>{checked ? 'Seleccionado' : 'Pendiente'}</Badge>
+                          <div className="list-row__headline consignments-pending-row__headline">
+                            <div>
+                              <p className="list-row__title">{item.productName}</p>
+                              <p className="consignments-inline-meta">Venta #{item.saleNumber} · {formatDate(item.saleDate)}</p>
+                            </div>
+                            <Badge tone={getSaleStatusBadgeTone(item.saleStatus)}>
+                              {formatSaleStatusLabel(item.saleStatus)}
+                            </Badge>
                           </div>
-                          <p className="list-row__text">Venta #{item.saleNumber} · Fecha: {formatDate(item.saleDate)}</p>
-                          <p className="list-row__text">
-                            Comprador: {item.buyerName?.trim() ? item.buyerName : 'Venta de mostrador'} · A pagar al proveedor: {formatCurrencyFromCents(item.amountCents)} · Ganancia: {formatCurrencyFromCents(item.gainCents)}
-                          </p>
+                          <div className="consignments-kv-grid">
+                            <MetricLine label="Comprador" value={item.buyerName?.trim() ? item.buyerName : 'Venta de mostrador'} />
+                            <MetricLine label="Saldo pendiente con el proveedor" value={formatCurrencyFromCents(item.amountCents)} />
+                            <MetricLine label="Liquidado antes" value={formatCurrencyFromCents(item.liquidatedPreviouslyCents ?? 0)} />
+                            <MetricLine label="Ganancia" value={formatCurrencyFromCents(item.gainCents)} />
+                          </div>
                         </div>
                       </label>
                     </li>
@@ -263,12 +292,46 @@ export function ConsignmentsPanel({ bridge, onBack, initialState }: Consignments
           </Surface>
 
           {showConfirmBlock ? (
-            <Surface aria-label="confirmar-liquidacion">
-              <h3 className="surface__title">Confirmar liquidación</h3>
-              <p className="surface__description">
-                Artículos seleccionados: {selectedSummary.count} · Total al proveedor: {formatCurrencyFromCents(selectedSummary.totalCents)} · Ganancia: {formatCurrencyFromCents(selectedSummary.totalGainCents)}
-              </p>
-              <div className="grid-2" style={{ marginTop: 12 }}>
+            <Surface aria-label="confirmar-liquidacion" className="consignments-review-block">
+              <div className="consignments-review-block__header">
+                <div>
+                  <h3 className="surface__title">Revisar liquidación</h3>
+                  <p className="surface__description">Chequeá importes y advertencias antes de confirmar el lote.</p>
+                </div>
+                <Badge tone="info">Paso previo</Badge>
+              </div>
+              <div className="consignments-summary-grid">
+                <SummaryCard label="Artículos" value={String(selectedSummary.count)} />
+                <SummaryCard label="Importe a pagar ahora" value={formatCurrencyFromCents(selectedSummary.totalCents)} />
+                <SummaryCard label="Saldo pendiente con el proveedor" value={formatCurrencyFromCents(selectedSummary.remainingCents)} />
+                <SummaryCard label="Ganancia" value={formatCurrencyFromCents(selectedSummary.totalGainCents)} />
+              </div>
+              {warningItems.length > 0 ? (
+                <Banner
+                  tone="warning"
+                  title="Hay ventas con pago parcial"
+                  message="Podés seguir, pero conviene revisar cuánto se cobró al cliente y cuánto queda pendiente antes de cerrar esta liquidación."
+                >
+                  <ul className="list consignments-warning-list">
+                    {warningItems.map((item) => (
+                      <li className="list-row consignments-warning-row" key={item.saleItemId}>
+                        <div className="list-row__content">
+                          <p className="list-row__title">
+                            Venta #{item.saleNumber} · {item.productName}
+                          </p>
+                          <div className="consignments-kv-grid">
+                            <MetricLine label="Cobrado al cliente" value={formatCurrencyFromCents(item.salePaidCents)} />
+                            <MetricLine label="Saldo del cliente" value={formatCurrencyFromCents(item.saleBalanceCents)} />
+                            <MetricLine label="Importe a pagar ahora" value={formatCurrencyFromCents(item.amountDueNowCents)} />
+                            <MetricLine label="Saldo pendiente con el proveedor" value={formatCurrencyFromCents(item.remainingBalanceCents)} />
+                          </div>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </Banner>
+              ) : null}
+              <div className="grid-2">
                 <Field label="Fecha de liquidación">
                   <input className="input" type="date" value={liquidationDate} onChange={(event) => setLiquidationDate(event.target.value)} />
                 </Field>
@@ -276,7 +339,7 @@ export function ConsignmentsPanel({ bridge, onBack, initialState }: Consignments
                   <input className="input" value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Ej: Primera quincena" />
                 </Field>
               </div>
-              <div className="actions" style={{ marginTop: 16 }}>
+              <div className="actions">
                 <Button type="button" variant="success" onClick={() => void confirmBatch()} disabled={submitting}>
                   {submitting ? 'Confirmando…' : 'Confirmar liquidación'}
                 </Button>
@@ -291,24 +354,35 @@ export function ConsignmentsPanel({ bridge, onBack, initialState }: Consignments
 
       {view === 'history' ? (
         <Surface>
-          <h3 className="surface__title">Historial de liquidaciones</h3>
+          <div className="page-header">
+            <div>
+              <h3 className="surface__title">Historial de liquidaciones</h3>
+              <p className="surface__description">Consultá lotes confirmados y abrí el detalle cuando necesites trazabilidad.</p>
+            </div>
+          </div>
           {loadingHistory ? <Banner tone="info" message="Cargando historial…" /> : null}
           {!loadingHistory && historyItems.length === 0 ? (
             <EmptyState title="Todavía no hay liquidaciones confirmadas." description="La primera liquidación va a quedar disponible en este historial." />
           ) : null}
 
           {historyItems.length > 0 ? (
-            <ul className="list" style={{ marginTop: 16 }}>
+            <ul className="list consignments-list-spaced">
               {historyItems.map((item) => (
-                <li className="list-row" key={item.batchId}>
+                <li className="list-row consignments-history-row" key={item.batchId}>
                   <div className="list-row__content">
-                    <div className="cluster">
-                      <p className="list-row__title">Liquidación #{item.batchNumber}</p>
-                      <Badge tone="info">Confirmada</Badge>
+                    <div className="list-row__headline consignments-history-row__headline">
+                      <div>
+                        <p className="list-row__title">Liquidación #{item.batchNumber}</p>
+                        <p className="consignments-inline-meta">Confirmada el {formatDate(item.liquidationDate)}</p>
+                      </div>
+                      <Badge tone="info">Lote confirmado</Badge>
                     </div>
-                    <p className="list-row__text">
-                      Fecha: {formatDate(item.liquidationDate)} · Artículos: {item.itemCount} · Total al proveedor: {formatCurrencyFromCents(item.totalCents)} · Ganancia: {formatCurrencyFromCents(item.totalGainCents)}
-                    </p>
+                    <div className="consignments-kv-grid">
+                      <MetricLine label="Artículos" value={String(item.itemCount)} />
+                      <MetricLine label="Liquidado" value={formatCurrencyFromCents(item.totalCents)} />
+                      <MetricLine label="Saldo proveedor después de liquidar" value={formatCurrencyFromCents(item.remainingCents)} />
+                      <MetricLine label="Ganancia" value={formatCurrencyFromCents(item.totalGainCents)} />
+                    </div>
                     <p className="list-row__text">Nota: {item.notes?.trim() ? item.notes : 'Sin nota'}</p>
                   </div>
                   <div className="list-row__aside">
@@ -321,7 +395,7 @@ export function ConsignmentsPanel({ bridge, onBack, initialState }: Consignments
                       onClick={() => void exportBatchExcel(item.batchId)}
                       disabled={exportingBatchId === item.batchId}
                     >
-                      {exportingBatchId === item.batchId ? 'Generando…' : 'Exportar Excel'}
+                      {exportingBatchId === item.batchId ? 'Generando…' : 'Exportar liquidación'}
                     </Button>
                   </div>
                 </li>
@@ -335,7 +409,7 @@ export function ConsignmentsPanel({ bridge, onBack, initialState }: Consignments
         <Surface>
           <PageHeader
             title={`Detalle de la liquidación #${detail.batchNumber}`}
-            description={`Fecha: ${formatDate(detail.liquidationDate)} · Artículos: ${detail.itemCount} · Total al proveedor: ${formatCurrencyFromCents(detail.totalCents)} · Ganancia: ${formatCurrencyFromCents(detail.totalGainCents)}`}
+            description="Detalle completo del lote confirmado, con importes congelados y contexto de cobro."
             actions={
               <>
                 <Button
@@ -344,7 +418,7 @@ export function ConsignmentsPanel({ bridge, onBack, initialState }: Consignments
                   onClick={() => void exportBatchExcel(detail.batchId)}
                   disabled={exportingBatchId === detail.batchId}
                 >
-                  {exportingBatchId === detail.batchId ? 'Generando…' : 'Exportar Excel'}
+                  {exportingBatchId === detail.batchId ? 'Generando…' : 'Exportar liquidación'}
                 </Button>
                 <Button type="button" variant="secondary" onClick={() => setView('history')}>
                   Volver al historial
@@ -357,15 +431,36 @@ export function ConsignmentsPanel({ bridge, onBack, initialState }: Consignments
 
           {loadingDetail ? <Banner tone="info" message="Cargando detalle…" /> : null}
 
-          <ul className="list">
+          <div className="consignments-summary-grid">
+            <SummaryCard label="Fecha" value={formatDate(detail.liquidationDate)} />
+            <SummaryCard label="Artículos" value={String(detail.itemCount)} />
+            <SummaryCard label="Liquidado" value={formatCurrencyFromCents(detail.totalCents)} />
+            <SummaryCard label="Saldo proveedor después de liquidar" value={formatCurrencyFromCents(detail.remainingCents)} />
+            <SummaryCard label="Ganancia" value={formatCurrencyFromCents(detail.totalGainCents)} />
+          </div>
+
+          <ul className="list consignments-list-spaced">
             {detail.items.map((item, index) => (
-              <li className="list-row" key={`${detail.batchNumber}-${item.saleNumber}-${index}`}>
+              <li className="list-row consignments-detail-row" key={`${detail.batchNumber}-${item.saleNumber}-${index}`}>
                 <div className="list-row__content">
-                  <p className="list-row__title">{item.productName}</p>
-                  <p className="list-row__text">Venta #{item.saleNumber} · Fecha de venta: {formatDate(item.saleDate)}</p>
-                  <p className="list-row__text">
-                    Comprador: {item.buyerName?.trim() ? item.buyerName : 'Venta de mostrador'} · Importe liquidado: {formatCurrencyFromCents(item.amountCents)} · Total vendido: {formatCurrencyFromCents(item.saleTotalCents)} · Ganancia: {formatCurrencyFromCents(item.gainCents)}
-                  </p>
+                  <div className="list-row__headline consignments-history-row__headline">
+                    <div>
+                      <p className="list-row__title">{item.productName}</p>
+                      <p className="consignments-inline-meta">Venta #{item.saleNumber} · {formatDate(item.saleDate)}</p>
+                    </div>
+                    <Badge tone={getSaleStatusBadgeTone(item.saleStatus)}>{formatSaleStatusLabel(item.saleStatus)}</Badge>
+                  </div>
+                  <div className="consignments-kv-grid consignments-kv-grid--detail">
+                    <MetricLine label="Comprador" value={item.buyerName?.trim() ? item.buyerName : 'Venta de mostrador'} />
+                    <MetricLine label="Cobrado al cliente" value={formatCurrencyFromCents(item.salePaidCents ?? 0)} />
+                    <MetricLine label="Saldo del cliente" value={formatCurrencyFromCents(item.saleBalanceCents ?? 0)} />
+                    <MetricLine label="Importe a pagar ahora" value={formatCurrencyFromCents(item.amountCents)} />
+                    <MetricLine label="Liquidado antes" value={formatCurrencyFromCents(item.liquidatedPreviouslyCents ?? 0)} />
+                    <MetricLine label="Acumulado" value={formatCurrencyFromCents(item.totalAccumulatedCents ?? item.amountCents)} />
+                    <MetricLine label="Saldo proveedor después de liquidar" value={formatCurrencyFromCents(item.remainingBalanceCents ?? 0)} />
+                    <MetricLine label="Ganancia del lote" value={formatCurrencyFromCents(item.gainCents)} />
+                  </div>
+                  <p className="list-row__text">Método de pago: {item.paymentMethodSummary ?? 'Sin pagos registrados'}</p>
                 </div>
               </li>
             ))}
@@ -397,4 +492,94 @@ function formatDate(value: string): string {
 
 function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message.trim() ? error.message : fallback;
+}
+
+function SummaryCard({ label, value }: { label: string; value: string }): JSX.Element {
+  return (
+    <div className="consignments-summary-card">
+      <p className="consignments-summary-card__label">{label}</p>
+      <p className="consignments-summary-card__value">{value}</p>
+    </div>
+  );
+}
+
+function MetricLine({ label, value }: { label: string; value: string }): JSX.Element {
+  return (
+    <p className="consignments-metric-line">
+      <span className="consignments-metric-line__label">{label}</span>
+      <span className="consignments-metric-line__value">{value}</span>
+    </p>
+  );
+}
+
+function buildStages({
+  view,
+  showConfirmBlock,
+  successBatch
+}: {
+  view: View;
+  showConfirmBlock: boolean;
+  successBatch: ConfirmConsignmentBatchResult | null;
+}): Array<{ label: string; hint: string; tone: StageTone }> {
+  return [
+    {
+      label: 'Pendientes',
+      hint: 'Seleccionar artículos',
+      tone: view === 'pending' && !showConfirmBlock ? 'current' : showConfirmBlock || Boolean(successBatch) ? 'complete' : 'idle'
+    },
+    {
+      label: 'Revisar liquidación',
+      hint: 'Chequeo previo',
+      tone: showConfirmBlock ? 'current' : successBatch ? 'complete' : 'idle'
+    },
+    {
+      label: 'Confirmar liquidación',
+      hint: 'Registrar el lote',
+      tone: successBatch ? 'complete' : 'idle'
+    },
+    {
+      label: 'Resultado',
+      hint: 'Resumen y exportación',
+      tone: successBatch ? 'current' : 'idle'
+    },
+    {
+      label: 'Historial',
+      hint: 'Lotes confirmados',
+      tone: view === 'history' ? 'current' : 'idle'
+    },
+    {
+      label: 'Detalle',
+      hint: 'Trazabilidad por artículo',
+      tone: view === 'detail' ? 'current' : 'idle'
+    }
+  ];
+}
+
+function formatSaleStatusLabel(status?: PendingConsignmentItem['saleStatus']): string {
+  switch (status) {
+    case 'pending_payment':
+      return 'Pago pendiente';
+    case 'partial_payment':
+      return 'Pago parcial';
+    case 'paid':
+      return 'Pagado';
+    case 'cancelled':
+      return 'Cancelado';
+    default:
+      return 'Sin estado';
+  }
+}
+
+function getSaleStatusBadgeTone(status?: PendingConsignmentItem['saleStatus']): React.ComponentProps<typeof Badge>['tone'] {
+  switch (status) {
+    case 'partial_payment':
+      return 'warning';
+    case 'paid':
+      return 'success';
+    case 'cancelled':
+      return 'danger';
+    case 'pending_payment':
+    default:
+      return 'neutral';
+  }
 }

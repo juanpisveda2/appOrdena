@@ -6,6 +6,10 @@ import type {
   ConsignmentBatchHistoryListItem,
   PendingConsignmentItem
 } from '../../../shared/contracts/consignments';
+import {
+  summarizeConsignmentLiquidationSelection,
+  type ConsignmentLiquidationSourceItem
+} from '../../../shared/consignments/liquidation';
 
 export interface ConsignmentsState {
   pendingItems: PendingConsignmentItem[];
@@ -16,6 +20,29 @@ export interface ConsignmentsState {
   notes: string;
   successBatch: ConfirmConsignmentBatchResult | null;
   statusMessage: string | null;
+}
+
+export interface ConsignmentSelectionItem {
+  saleItemId: number;
+  saleNumber: number;
+  productName: string;
+  buyerName: string | null;
+  saleStatus: PendingConsignmentItem['saleStatus'];
+  salePaidCents: number;
+  saleBalanceCents: number;
+  amountDueNowCents: number;
+  remainingBalanceCents: number;
+  liquidatedPreviouslyCents: number;
+  gainCents: number;
+}
+
+export interface ConsignmentSelectionSummary {
+  count: number;
+  totalCents: number;
+  remainingCents: number;
+  totalGainCents: number;
+  items: ConsignmentSelectionItem[];
+  partialItems: ConsignmentSelectionItem[];
 }
 
 const BUSINESS_TIME_ZONE = 'America/Argentina/Buenos_Aires';
@@ -58,17 +85,59 @@ export function togglePendingSelection(selectedIds: number[], saleItemId: number
     : [...selectedIds, saleItemId];
 }
 
-export function summarizeSelection(state: ConsignmentsState): {
-  count: number;
-  totalCents: number;
-  totalGainCents: number;
-} {
-  const selectedItems = state.pendingItems.filter((item) => state.selectedIds.includes(item.saleItemId));
+export function summarizeSelection(state: ConsignmentsState): ConsignmentSelectionSummary {
+  const sourceItems: ConsignmentLiquidationSourceItem[] = state.pendingItems.map((item) => ({
+    saleItemId: item.saleItemId,
+    saleId: item.saleId ?? item.saleNumber,
+    saleStatus: item.saleStatus,
+    salePaidCents: item.salePaidCents,
+    supplierTotalToLiquidateCents: (item.amountCents ?? 0) + (item.liquidatedPreviouslyCents ?? 0),
+    liquidatedPreviouslyCents: item.liquidatedPreviouslyCents ?? 0
+  }));
+  const itemById = new Map(state.pendingItems.map((item) => [item.saleItemId, item]));
+  const summary = summarizeConsignmentLiquidationSelection(sourceItems, state.selectedIds);
 
   return {
-    count: selectedItems.length,
-    totalCents: selectedItems.reduce((sum, item) => sum + item.amountCents, 0),
-    totalGainCents: selectedItems.reduce((sum, item) => sum + item.gainCents, 0)
+    count: summary.count,
+    totalCents: summary.totalDueNowCents,
+    remainingCents: summary.totalRemainingBalanceCents,
+    totalGainCents: summary.items.reduce((sum, item) => sum + (itemById.get(item.saleItemId)?.gainCents ?? 0), 0),
+    items: summary.items.map((item) => {
+      const source = itemById.get(item.saleItemId);
+
+      return {
+        saleItemId: item.saleItemId,
+        saleNumber: source?.saleNumber ?? 0,
+        productName: source?.productName ?? '',
+        buyerName: source?.buyerName ?? null,
+        saleStatus: source?.saleStatus,
+        salePaidCents: source?.salePaidCents ?? 0,
+        saleBalanceCents: source?.saleBalanceCents ?? 0,
+        amountDueNowCents: item.amountDueNowCents,
+        remainingBalanceCents: item.remainingBalanceCents,
+        liquidatedPreviouslyCents: source?.liquidatedPreviouslyCents ?? 0,
+        gainCents: source?.gainCents ?? 0
+      };
+    }),
+    partialItems: summary.items
+      .map((item) => {
+        const source = itemById.get(item.saleItemId);
+
+        return {
+          saleItemId: item.saleItemId,
+          saleNumber: source?.saleNumber ?? 0,
+          productName: source?.productName ?? '',
+          buyerName: source?.buyerName ?? null,
+          saleStatus: source?.saleStatus,
+          salePaidCents: source?.salePaidCents ?? 0,
+          saleBalanceCents: source?.saleBalanceCents ?? 0,
+          amountDueNowCents: item.amountDueNowCents,
+          remainingBalanceCents: item.remainingBalanceCents,
+          liquidatedPreviouslyCents: source?.liquidatedPreviouslyCents ?? 0,
+          gainCents: source?.gainCents ?? 0
+        } satisfies ConsignmentSelectionItem;
+      })
+      .filter((item) => item.saleStatus === 'partial_payment')
   };
 }
 

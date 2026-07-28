@@ -94,13 +94,58 @@ describe('consignments renderer model', () => {
     await actions.loadPending();
 
     expect(harness.getState().pendingItems).toHaveLength(2);
-    expect(summarizeSelection(harness.getState())).toEqual({ count: 0, totalCents: 0, totalGainCents: 0 });
+    expect(summarizeSelection(harness.getState())).toMatchObject({
+      count: 0,
+      totalCents: 0,
+      remainingCents: 0,
+      totalGainCents: 0
+    });
 
     actions.toggleSelection(10);
     actions.toggleSelection(11);
 
     expect(togglePendingSelection([10], 10)).toEqual([]);
-    expect(summarizeSelection(harness.getState())).toEqual({ count: 2, totalCents: 170000, totalGainCents: 50000 });
+    expect(summarizeSelection(harness.getState())).toMatchObject({
+      count: 2,
+      totalCents: 170000,
+      remainingCents: 170000,
+      totalGainCents: 50000
+    });
+  });
+
+  it('keeps selection gain aligned with the current liquidation batch instead of repeating the full historical gain', () => {
+    const state = createInitialConsignmentsState();
+    state.pendingItems = [
+      {
+        saleItemId: 10,
+        saleId: 5,
+        productName: 'Aros parciales',
+        saleNumber: 12,
+        saleDate: '2026-07-16T10:00:00.000Z',
+        buyerName: 'Ana',
+        saleStatus: 'partial_payment',
+        salePaidCents: 20_000,
+        saleBalanceCents: 100_000,
+        amountCents: 90_000,
+        liquidatedPreviouslyCents: 0,
+        gainCents: 2_000
+      }
+    ];
+    state.selectedIds = [10];
+
+    expect(summarizeSelection(state)).toMatchObject({
+      count: 1,
+      totalCents: 20_000,
+      remainingCents: 90_000,
+      totalGainCents: 2_000,
+      items: [
+        expect.objectContaining({
+          amountDueNowCents: 20_000,
+          remainingBalanceCents: 90_000,
+          gainCents: 2_000
+        })
+      ]
+    });
   });
 
   it('disables confirmation semantics with no selection and builds the confirmation request with optional notes', () => {
@@ -150,6 +195,7 @@ describe('consignments renderer model', () => {
         itemCount: 1,
         totalCents: 90000,
         totalGainCents: 30000,
+        remainingCents: 0,
         notes: 'Primera quincena',
         createdAt: '2026-07-20T12:00:00.000Z'
       }
@@ -161,6 +207,7 @@ describe('consignments renderer model', () => {
       itemCount: 1,
       totalCents: 90000,
       totalGainCents: 30000,
+      remainingCents: 0,
       notes: 'Primera quincena',
       createdAt: '2026-07-20T12:00:00.000Z',
       items: [
@@ -176,6 +223,13 @@ describe('consignments renderer model', () => {
           personalizationCents: null,
           saleTotalCents: 120000,
           amountCents: 90000,
+          saleStatus: 'paid',
+          salePaidCents: 120000,
+          saleBalanceCents: 0,
+          paymentMethodSummary: 'Efectivo: $ 1.200,00',
+          liquidatedPreviouslyCents: 0,
+          totalAccumulatedCents: 90000,
+          remainingBalanceCents: 0,
           productGainCents: 30000,
           personalizationGainCents: 0,
           gainCents: 30000,
@@ -193,6 +247,7 @@ describe('consignments renderer model', () => {
           itemCount: 1,
           totalCents: 90000,
           totalGainCents: 30000,
+          remainingCents: 0,
           notes: 'Primera quincena',
           createdAt: '2026-07-20T12:00:00.000Z'
         }),

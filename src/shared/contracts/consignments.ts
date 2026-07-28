@@ -1,14 +1,22 @@
+import type { SaleStatus } from './sales';
+
 export interface ListPendingConsignmentItemsRequest {
   limit?: number;
 }
 
 export interface PendingConsignmentItem {
   saleItemId: number;
+  saleId?: number;
+  saleStatus?: SaleStatus;
   productName: string;
   saleNumber: number;
   saleDate: string;
   buyerName: string | null;
+  saleTotalCents?: number;
+  salePaidCents?: number;
+  saleBalanceCents?: number;
   amountCents: number;
+  liquidatedPreviouslyCents?: number;
   gainCents: number;
 }
 
@@ -25,6 +33,7 @@ export interface ConfirmConsignmentBatchResult {
   itemCount: number;
   totalCents: number;
   totalGainCents: number;
+  remainingCents: number;
   notes: string | null;
   createdAt: string;
 }
@@ -44,6 +53,7 @@ export interface ConsignmentBatchHistoryListItem {
   itemCount: number;
   totalCents: number;
   totalGainCents: number;
+  remainingCents: number;
   notes: string | null;
   createdAt: string;
 }
@@ -65,6 +75,10 @@ export interface ExportConsignmentBatchExcelResult {
 }
 
 export interface ConsignmentBatchDetailItem {
+  saleStatus?: SaleStatus;
+  salePaidCents?: number;
+  saleBalanceCents?: number;
+  paymentMethodSummary?: string;
   productName: string;
   category: string;
   material: string;
@@ -76,6 +90,9 @@ export interface ConsignmentBatchDetailItem {
   personalizationCents: number | null;
   saleTotalCents: number;
   amountCents: number;
+  liquidatedPreviouslyCents?: number;
+  totalAccumulatedCents?: number;
+  remainingBalanceCents?: number;
   productGainCents: number;
   personalizationGainCents: number;
   gainCents: number;
@@ -89,6 +106,7 @@ export interface ConsignmentBatchDetail {
   itemCount: number;
   totalCents: number;
   totalGainCents: number;
+  remainingCents: number;
   notes: string | null;
   createdAt: string;
   items: ConsignmentBatchDetailItem[];

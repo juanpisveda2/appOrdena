@@ -1,10 +1,11 @@
-import { calculatePricingSummary } from '../../../shared/catalog/pricing';
+import { calculateExpectedProfitCents } from '../../../shared/catalog/pricing';
 import type { AppBridge } from '../../../shared/contracts/app';
 import type {
   CatalogCategoryFilter,
+  CatalogProductDetail,
   CatalogListItem,
   CatalogListResult,
-  CatalogProductDetail,
+  CatalogSearchResult,
   DuplicateCandidate,
   ReusableProductCategory,
   SaveStockIntakeRequest,
@@ -27,8 +28,13 @@ export interface CatalogStockState {
   view: CatalogStockView;
   hubSearchQuery: string;
   categoryFilter: CatalogCategoryFilter;
+  hubPage: number;
   hubStatus: 'idle' | 'loading' | 'ready' | 'error';
   hubError: string | null;
+  hubSummaryStatus: 'idle' | 'loading' | 'ready' | 'error';
+  hubSummaryError: string | null;
+  pendingSalesCount: number;
+  pendingSettlementCount: number;
   catalogProducts: CatalogListItem[];
   detailStatus: 'idle' | 'loading' | 'ready' | 'error';
   detailError: string | null;
@@ -63,12 +69,18 @@ export interface CatalogStockState {
     matches: DuplicateCandidate[];
     pendingRequest: SaveStockIntakeRequest;
   } | null;
+  earlyDuplicateCheck: {
+    status: 'idle' | 'loading' | 'ready' | 'error';
+    matches: CatalogSearchResult[];
+    query: string;
+    dismissedQuery: string | null;
+  };
   lastSaved: SavedStockIntakeResult | null;
 }
 
 export interface PricingPreview {
-  expectedProfitCents: number;
-  totalExpectedProfitCents: number;
+  cashExpectedProfitCents: number;
+  listExpectedProfitCents: number;
 }
 
 export interface CatalogStockSubmitReadiness {
@@ -97,6 +109,12 @@ const currencyFormatter = new Intl.NumberFormat('es-AR', {
 const percentageFormatter = new Intl.NumberFormat('es-AR', {
   minimumFractionDigits: 0,
   maximumFractionDigits: 2
+});
+
+const shortDateFormatter = new Intl.DateTimeFormat('es-AR', {
+  day: 'numeric',
+  month: 'short',
+  year: 'numeric'
 });
 
 const categoryLabels: Record<ReusableProductCategory, string> = {
@@ -129,6 +147,30 @@ function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+function formatDecimalForInput(value: number): string {
+  if (!Number.isFinite(value)) {
+    return '';
+  }
+
+  return value.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1');
+}
+
+function formatCentsForInput(amountCents: number | null | undefined): string {
+  if (amountCents == null) {
+    return '';
+  }
+
+  return formatDecimalForInput(amountCents / 100);
+}
+
+function formatBasisPointsForInput(basisPoints: number | null | undefined): string {
+  if (basisPoints == null) {
+    return '';
+  }
+
+  return formatDecimalForInput(basisPoints / 100);
+}
+
 function createInitialIntakeForm(now: string): CatalogStockState['intakeForm'] {
   return {
     enteredQuantity: '',
@@ -147,6 +189,15 @@ function createInitialIntakeAutomation(): CatalogStockState['intakeAutomation'] 
     lastSuggestedCashPriceCents: '',
     profitPercentageEditedManually: false,
     lastSuggestedProfitPercentageBasisPoints: ''
+  };
+}
+
+function createInitialEarlyDuplicateCheck(): CatalogStockState['earlyDuplicateCheck'] {
+  return {
+    status: 'idle',
+    matches: [],
+    query: '',
+    dismissedQuery: null
   };
 }
 
@@ -330,6 +381,7 @@ function resetDraftState(state: CatalogStockState, now?: string): CatalogStockSt
     submitStatus: 'idle',
     submitMessage: null,
     duplicateWarning: null,
+    earlyDuplicateCheck: createInitialEarlyDuplicateCheck(),
     lastSaved: null
   };
 }
@@ -338,12 +390,83 @@ function isBlank(value: string): boolean {
   return value.trim().length === 0;
 }
 
+export function buildEarlyDuplicateQuery(state: CatalogStockState): string {
+  if (state.view !== 'new-product') {
+    return '';
+  }
+
+  return [state.newProduct.name.trim(), getResolvedProductMaterial(state), state.newProduct.variant.trim()]
+    .filter((value) => value.length > 0)
+    .join(' ')
+    .trim();
+}
+
+function normalizeComparableText(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function isEarlyDuplicateMatch(state: CatalogStockState, result: CatalogSearchResult): boolean {
+  const expectedName = normalizeComparableText(state.newProduct.name);
+  const expectedMaterial = normalizeComparableText(getResolvedProductMaterial(state));
+  const expectedVariant = normalizeComparableText(state.newProduct.variant);
+
+  if (expectedName.length === 0) {
+    return false;
+  }
+
+  const resultName = normalizeComparableText(result.name);
+  if (!resultName.includes(expectedName) && !expectedName.includes(resultName)) {
+    return false;
+  }
+
+  if (expectedMaterial.length > 0) {
+    const resultMaterial = normalizeComparableText(result.material);
+    if (resultMaterial.length === 0 || (!resultMaterial.includes(expectedMaterial) && !expectedMaterial.includes(resultMaterial))) {
+      return false;
+    }
+  }
+
+  if (expectedVariant.length > 0) {
+    const resultVariant = normalizeComparableText(result.variant);
+    if (resultVariant.length === 0 || (!resultVariant.includes(expectedVariant) && !expectedVariant.includes(resultVariant))) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 export function formatCurrencyFromCents(amountCents: number): string {
   return currencyFormatter.format(amountCents / 100);
 }
 
 export function formatPercentageFromBasisPoints(basisPoints: number): string {
   return `${percentageFormatter.format(basisPoints / 100)}%`;
+}
+
+export function formatDateLabel(value: string): string {
+  const [year, month, day] = value.split('-').map((part) => Number.parseInt(part, 10));
+
+  if (!year || !month || !day) {
+    return value;
+  }
+
+  const parsed = new Date(year, month - 1, day, 12);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  const parts = shortDateFormatter.formatToParts(parsed);
+  const dayPart = parts.find((part) => part.type === 'day')?.value;
+  const monthPart = parts.find((part) => part.type === 'month')?.value.replace('.', '');
+  const yearPart = parts.find((part) => part.type === 'year')?.value;
+
+  if (!dayPart || !monthPart || !yearPart) {
+    return shortDateFormatter.format(parsed);
+  }
+
+  return `${dayPart} ${monthPart} ${yearPart}`;
 }
 
 export function tryParseCurrencyInputToCents(value: string): number | null {
@@ -413,8 +536,13 @@ export function createInitialCatalogStockState(now = todayIsoDate()): CatalogSto
     view: 'hub',
     hubSearchQuery: '',
     categoryFilter: 'all',
+    hubPage: 1,
     hubStatus: 'idle',
     hubError: null,
+    hubSummaryStatus: 'idle',
+    hubSummaryError: null,
+    pendingSalesCount: 0,
+    pendingSettlementCount: 0,
     catalogProducts: [],
     detailStatus: 'idle',
     detailError: null,
@@ -433,6 +561,7 @@ export function createInitialCatalogStockState(now = todayIsoDate()): CatalogSto
     submitStatus: 'idle',
     submitMessage: null,
     duplicateWarning: null,
+    earlyDuplicateCheck: createInitialEarlyDuplicateCheck(),
     lastSaved: null
   };
 }
@@ -450,21 +579,52 @@ export function getPricingPreview(state: CatalogStockState): PricingPreview | nu
     return null;
   }
 
-  const supplierCost = tryParseCurrencyInputToCents(state.intakeForm.supplierUnitCostCents);
+  const cashPrice = tryParseCurrencyInputToCents(state.intakeForm.cashPriceCents);
+  const listPrice = tryParseCurrencyInputToCents(state.intakeForm.listPriceCents);
   const basisPoints = tryParsePercentageInputToBasisPoints(state.intakeForm.profitPercentageBasisPoints);
 
-  if (supplierCost == null || basisPoints == null) {
+  if (cashPrice == null || listPrice == null || basisPoints == null) {
     return null;
   }
 
-  const summary = calculatePricingSummary({
-    supplierUnitCostCents: supplierCost,
-    profitPercentageBasisPoints: basisPoints
-  });
+  const cashExpectedProfitCents = calculateExpectedProfitCents(cashPrice, basisPoints);
+  const listExpectedProfitCents = calculateExpectedProfitCents(listPrice, basisPoints);
 
   return {
-    expectedProfitCents: summary.expectedProfitCents,
-    totalExpectedProfitCents: summary.totalExpectedProfitCents
+    cashExpectedProfitCents,
+    listExpectedProfitCents
+  };
+}
+
+function createIntakeDraftFromProductDetail(
+  detailProduct: CatalogProductDetail,
+  now = todayIsoDate()
+): Pick<CatalogStockState, 'intakeProduct' | 'intakeForm' | 'intakeAutomation'> {
+  const latestIntake = detailProduct.recentIntakes[0] ?? null;
+  const supplierUnitCostCents = formatCentsForInput(latestIntake?.supplierUnitCostCents);
+  const cashPriceCents = formatCentsForInput(detailProduct.currentCashPriceCents ?? latestIntake?.cashPriceCents ?? null);
+  const listPriceCents = formatCentsForInput(detailProduct.currentListPriceCents ?? latestIntake?.listPriceCents ?? null);
+  const profitPercentageBasisPoints = formatBasisPointsForInput(
+    detailProduct.currentProfitPercentageBasisPoints ?? latestIntake?.profitPercentageBasisPoints ?? null
+  );
+
+  return {
+    intakeProduct: createProductReference(detailProduct),
+    intakeForm: {
+      enteredQuantity: '',
+      supplierUnitCostCents,
+      cashPriceCents,
+      listPriceCents,
+      profitPercentageBasisPoints,
+      intakeDate: now,
+      notes: ''
+    },
+    intakeAutomation: {
+      cashPriceEditedManually: cashPriceCents.length > 0 && cashPriceCents !== supplierUnitCostCents,
+      lastSuggestedCashPriceCents: supplierUnitCostCents,
+      profitPercentageEditedManually: profitPercentageBasisPoints.length > 0,
+      lastSuggestedProfitPercentageBasisPoints: profitPercentageBasisPoints
+    }
   };
 }
 
@@ -614,9 +774,13 @@ function getProductIdentity(product: CatalogProductReference | null): string {
   return `${product.name} · ${formatVariantLabel(product.variant)}`;
 }
 
-function buildSavedMessage(state: CatalogStockState, duplicateConfirmed = false): string {
+function buildSavedMessage(
+  state: CatalogStockState,
+  availableQuantity: number,
+  duplicateConfirmed = false
+): string {
   const enteredQuantity = Number.parseInt(state.intakeForm.enteredQuantity.trim(), 10);
-  const baseMessage = `Guardamos ${enteredQuantity === 1 ? '1 unidad' : `${enteredQuantity} unidades`} para ${
+  const productIdentity =
     state.view === 'new-intake'
       ? getProductIdentity(state.intakeProduct)
       : getProductIdentity({
@@ -625,9 +789,12 @@ function buildSavedMessage(state: CatalogStockState, duplicateConfirmed = false)
           name: state.newProduct.name.trim() || 'el producto nuevo',
           material: state.newProduct.material,
           variant: state.newProduct.variant
-        })
-  }.`;
-  const availabilityMessage = ` Quedaron ${enteredQuantity === 1 ? '1 unidad' : `${enteredQuantity} unidades`} disponibles ahora.`;
+        });
+  const baseMessage =
+    state.view === 'new-intake'
+      ? `Registramos un ingreso adicional de ${enteredQuantity === 1 ? '1 unidad' : `${enteredQuantity} unidades`} para ${productIdentity}.`
+      : `Guardamos ${enteredQuantity === 1 ? '1 unidad' : `${enteredQuantity} unidades`} para ${productIdentity}.`;
+  const availabilityMessage = ` Quedaron ${availableQuantity === 1 ? '1 unidad' : `${availableQuantity} unidades`} disponibles ahora.`;
 
   if (!duplicateConfirmed) {
     return `${baseMessage}${availabilityMessage}`;
@@ -706,7 +873,7 @@ export function createCatalogStockActions({
       const detailProduct = await loadProductDetailInternal(result.reusableProductId);
 
       setState((current) =>
-        buildDetailSuccessState(current, detailProduct, buildSavedMessage(current, duplicateConfirmed), result)
+        buildDetailSuccessState(current, detailProduct, buildSavedMessage(current, detailProduct.availableQuantity, duplicateConfirmed), result)
       );
     } catch {
       setState((current) => ({
@@ -724,6 +891,7 @@ export function createCatalogStockActions({
       setState((current) => ({
         ...current,
         hubSearchQuery,
+        hubPage: 1,
         hubError: null
       }));
     },
@@ -731,7 +899,14 @@ export function createCatalogStockActions({
       setState((current) => ({
         ...current,
         categoryFilter,
+        hubPage: 1,
         hubError: null
+      }));
+    },
+    setHubPage(hubPage: number): void {
+      setState((current) => ({
+        ...current,
+        hubPage: Math.max(1, hubPage)
       }));
     },
     async loadCatalogHub(): Promise<void> {
@@ -774,6 +949,50 @@ export function createCatalogStockActions({
             ...current,
             hubStatus: 'error',
             hubError: 'No pudimos cargar el catálogo. Intentá de nuevo.'
+          };
+        });
+      }
+    },
+    async loadHubSummary(): Promise<void> {
+      setState((current) => ({
+        ...current,
+        hubSummaryStatus: 'loading',
+        hubSummaryError: null
+      }));
+
+      try {
+        const [salesHistory, pendingConsignments] = await Promise.all([
+          bridge.sales.listHistory({ limit: 100 }),
+          bridge.consignments.listPendingItems({ limit: 200 })
+        ]);
+
+        const pendingSalesCount = salesHistory.filter(
+          (sale) => sale.status === 'pending_payment' || sale.status === 'partial_payment'
+        ).length;
+
+        setState((current) => {
+          if (current.view !== 'hub') {
+            return current;
+          }
+
+          return {
+            ...current,
+            hubSummaryStatus: 'ready',
+            hubSummaryError: null,
+            pendingSalesCount,
+            pendingSettlementCount: pendingConsignments.length
+          };
+        });
+      } catch {
+        setState((current) => {
+          if (current.view !== 'hub') {
+            return current;
+          }
+
+          return {
+            ...current,
+            hubSummaryStatus: 'error',
+            hubSummaryError: 'No pudimos actualizar los pendientes en este momento.'
           };
         });
       }
@@ -829,20 +1048,54 @@ export function createCatalogStockActions({
         intakeProduct: null
       }));
     },
-    openNewIntake(product: CatalogProductReference): void {
+    async openNewIntake(product: CatalogProductReference): Promise<void> {
       const currentState = getState();
 
       if (!shouldProceedAway(currentState, confirmLeave)) {
         return;
       }
 
+      const now = todayIsoDate();
+
       setState((current) => ({
-        ...resetDraftState(current, current.intakeForm.intakeDate),
+        ...resetDraftState(current, now),
         view: 'new-intake',
         intakeProduct: createProductReference(product),
         submitMessage: null,
-        detailError: null
+        detailStatus: 'loading',
+        detailError: null,
+        detailProduct: null
       }));
+
+      try {
+        const detailProduct = await loadProductDetailInternal(product.reusableProductId);
+
+        setState((current) => {
+          if (current.view !== 'new-intake' || current.intakeProduct?.reusableProductId !== product.reusableProductId) {
+            return current;
+          }
+
+          return {
+            ...current,
+            ...createIntakeDraftFromProductDetail(detailProduct, now),
+            detailStatus: 'ready',
+            detailError: null,
+            detailProduct
+          };
+        });
+      } catch {
+        setState((current) => {
+          if (current.view !== 'new-intake' || current.intakeProduct?.reusableProductId !== product.reusableProductId) {
+            return current;
+          }
+
+          return {
+            ...current,
+            detailStatus: 'error',
+            detailError: 'No pudimos cargar los valores actuales del producto. Podés completar el ingreso manualmente.'
+          };
+        });
+      }
     },
     goToHub(): void {
       const currentState = getState();
@@ -872,6 +1125,13 @@ export function createCatalogStockActions({
           submitStatus: 'idle',
           submitMessage: null,
           duplicateWarning: null,
+          earlyDuplicateCheck:
+            field === 'name' || field === 'material' || field === 'variant' || field === 'category'
+              ? {
+                  ...current.earlyDuplicateCheck,
+                  dismissedQuery: null
+                }
+              : current.earlyDuplicateCheck,
           lastSaved: null
         };
 
@@ -897,11 +1157,149 @@ export function createCatalogStockActions({
           submitStatus: 'idle',
           submitMessage: null,
           duplicateWarning: null,
+          earlyDuplicateCheck: {
+            ...current.earlyDuplicateCheck,
+            dismissedQuery: null
+          },
           lastSaved: null
         };
 
         return applyCategoryMaterialDefaults(nextState);
       });
+    },
+    dismissEarlyDuplicateCheck(): void {
+      setState((current) => ({
+        ...current,
+        earlyDuplicateCheck: {
+          ...current.earlyDuplicateCheck,
+          dismissedQuery: current.earlyDuplicateCheck.query,
+          status: current.earlyDuplicateCheck.status === 'error' ? 'idle' : current.earlyDuplicateCheck.status,
+          matches: current.earlyDuplicateCheck.status === 'error' ? [] : current.earlyDuplicateCheck.matches
+        }
+      }));
+    },
+    async loadEarlyDuplicateMatches(): Promise<void> {
+      const current = getState();
+      const query = buildEarlyDuplicateQuery(current);
+
+      if (current.view !== 'new-product') {
+        return;
+      }
+
+      if (current.newProduct.name.trim().length < 3) {
+        setState((state) => ({
+          ...state,
+          earlyDuplicateCheck: {
+            ...state.earlyDuplicateCheck,
+            status: 'idle',
+            matches: [],
+            query
+          }
+        }));
+        return;
+      }
+
+      setState((state) => ({
+        ...state,
+        earlyDuplicateCheck: {
+          ...state.earlyDuplicateCheck,
+          status: 'loading',
+          query,
+          matches: []
+        }
+      }));
+
+      try {
+        const results = await bridge.catalog.search({ query, limit: 8 });
+
+        setState((state) => {
+          if (state.view !== 'new-product' || buildEarlyDuplicateQuery(state) !== query) {
+            return state;
+          }
+
+          return {
+            ...state,
+            earlyDuplicateCheck: {
+              ...state.earlyDuplicateCheck,
+              status: 'ready',
+              query,
+              matches: results.filter((result) => isEarlyDuplicateMatch(state, result))
+            }
+          };
+        });
+      } catch {
+        setState((state) => {
+          if (state.view !== 'new-product' || buildEarlyDuplicateQuery(state) !== query) {
+            return state;
+          }
+
+          return {
+            ...state,
+            earlyDuplicateCheck: {
+              ...state.earlyDuplicateCheck,
+              status: 'error',
+              query,
+              matches: []
+            }
+          };
+        });
+      }
+    },
+    async openDuplicateMatch(reusableProductId: number): Promise<void> {
+      const current = getState();
+      const match = current.earlyDuplicateCheck.matches.find((candidate) => candidate.reusableProductId === reusableProductId);
+
+      if (!match) {
+        return;
+      }
+
+      const now = todayIsoDate();
+
+      setState((state) => ({
+        ...resetDraftState(state, now),
+        view: 'new-intake',
+        intakeProduct: createProductReference({
+          reusableProductId: match.reusableProductId,
+          category: match.category,
+          name: match.name,
+          material: match.material,
+          variant: match.variant
+        }),
+        submitMessage: null,
+        detailStatus: 'loading',
+        detailError: null,
+        detailProduct: null
+      }));
+
+      try {
+        const detailProduct = await loadProductDetailInternal(match.reusableProductId);
+
+        setState((state) => {
+          if (state.view !== 'new-intake' || state.intakeProduct?.reusableProductId !== match.reusableProductId) {
+            return state;
+          }
+
+          return {
+            ...state,
+            ...createIntakeDraftFromProductDetail(detailProduct, now),
+            detailStatus: 'ready',
+            detailError: null,
+            detailProduct
+          };
+        });
+      } catch {
+        setState((state) => {
+          if (state.view !== 'new-intake' || state.intakeProduct?.reusableProductId !== match.reusableProductId) {
+            return state;
+          }
+
+          return {
+            ...state,
+            detailStatus: 'error',
+            detailError: 'No pudimos cargar los valores actuales del producto. Podés completar el ingreso manualmente.'
+          };
+        });
+      }
     },
     updateIntakeField(field: keyof CatalogStockState['intakeForm'], value: string): void {
       setState((current) => {

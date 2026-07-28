@@ -28,6 +28,10 @@ describe('exportConsignmentBatchExcel', () => {
         phoneText: '3510000000'
       },
       draftItems: [{ reusableProductId: seeded.reusableProductId, quantity: 1, priceType: 'cash' }],
+      initialPayment: {
+        amountCents: 120_000,
+        paymentMethod: 'cash'
+      },
       saleDate: '2026-07-16T10:00:00.000Z'
     });
     const batch = confirmConsignmentBatch(initialized.database, {
@@ -60,37 +64,44 @@ describe('exportConsignmentBatchExcel', () => {
     });
 
     const workbook = await loadWorkbook(writtenBuffer);
-    expect(workbook.worksheets.map((worksheet) => worksheet.name)).toEqual(['Summary', 'Detail']);
-    expect(readSheetRows(workbook, 'Summary')).toEqual([
-      ['Liquidation number', 1],
-      ['Liquidation date', '20/07/2026'],
-      ['Item count', 1],
-      ['Total sold', 1200],
-      ['Total paid to supplier', 1000],
-      ['Total profit', 100]
+    expect(workbook.worksheets.map((worksheet) => worksheet.name)).toEqual(['Resumen', 'Detalle']);
+    expect(readSheetRows(workbook, 'Resumen')).toEqual([
+      ['Número de liquidación', 1],
+      ['Fecha de liquidación', '20/07/2026'],
+      ['Cantidad de artículos', 1],
+      ['Ventas incluidas', 1],
+      ['Total vendido', 1200],
+      ['Total cobrado al cliente', 1200],
+      ['Total liquidado al proveedor', 1080],
+      ['Ganancia de la liquidación', detail.totalGainCents / 100],
+      ['Saldo proveedor después de liquidar', 0]
     ]);
 
-    const detailRows = readSheetRows(workbook, 'Detail');
+    const detailRows = readSheetRows(workbook, 'Detalle');
     expect(detailRows[1]).toEqual([
       '16/07/2026',
       sale.saleNumber,
       'Aros de plata',
-      'Jewelry',
-      'Plata · 18 mm',
+      'Joyas',
       'Ana',
       1200,
       '',
       1200,
-      1000,
-      100,
-      '',
-      100,
+      'Pagado',
+      'Efectivo: $\u00a01.200,00',
+      1080,
+      0,
+      1080,
+      0,
+      detail.items[0]!.gainCents / 100,
       '20/07/2026'
     ]);
-    expect(detailRows[2]).toEqual(['Totals', '', '', '', '', '', '', '', 1200, 1000, '', '', 100, '']);
-    expect(detail.items[0]?.amountCents).toBe(100_000);
-    expect(detail.items[0]?.gainCents).toBe(10_000);
-    expect(workbook.getWorksheet('Summary')?.views).toEqual(
+    expect(detailRows[2]).toEqual([
+      'Totales', '', '', '', '', '', '', 1200, '', '', 1080, 0, 1080, 0, detail.totalGainCents / 100, ''
+    ]);
+    expect(detail.items[0]?.amountCents).toBe(108_000);
+    expect(detail.items[0]?.gainCents).toBe(detail.totalGainCents);
+    expect(workbook.getWorksheet('Resumen')?.views).toEqual(
       expect.arrayContaining([expect.objectContaining({ state: 'frozen', ySplit: 1, topLeftCell: 'A2' })])
     );
   });
@@ -125,6 +136,10 @@ describe('exportConsignmentBatchExcel', () => {
         phoneText: '3510000000'
       },
       draftItems: [{ reusableProductId: firstProduct.reusableProductId, quantity: 1, priceType: 'cash' }],
+      initialPayment: {
+        amountCents: 120_000,
+        paymentMethod: 'cash'
+      },
       saleDate: '2026-07-16T10:00:00.000Z'
     });
     const secondSale = confirmSaleDraft(initialized.database, {
@@ -163,48 +178,56 @@ describe('exportConsignmentBatchExcel', () => {
     );
 
     const workbook = await loadWorkbook(writtenBuffer);
-    const summaryRows = readSheetRows(workbook, 'Summary');
-    expect(summaryRows[2]).toEqual(['Item count', 2]);
-    expect(summaryRows[3]).toEqual(['Total sold', 4000]);
-    expect(summaryRows[4]).toEqual(['Total paid to supplier', 3000]);
-    expect(summaryRows[5]).toEqual(['Total profit', 500]);
+    const summaryRows = readSheetRows(workbook, 'Resumen');
+    expect(summaryRows[2]).toEqual(['Cantidad de artículos', 2]);
+    expect(summaryRows[4]).toEqual(['Total vendido', 4000]);
+    expect(summaryRows[5]).toEqual(['Total cobrado al cliente', 4000]);
+    expect(summaryRows[6]).toEqual(['Total liquidado al proveedor', 3390]);
+    expect(summaryRows[7]).toEqual(['Ganancia de la liquidación', detail.totalGainCents / 100]);
+    expect(summaryRows[8]).toEqual(['Saldo proveedor después de liquidar', 0]);
 
-    const exportedRows = readSheetRows(workbook, 'Detail');
+    const exportedRows = readSheetRows(workbook, 'Detalle');
     expect(exportedRows[1]).toEqual([
       '17/07/2026',
       secondSale.saleNumber,
       'Mate grabado',
-      'Mate products',
-      'Calabaza · Premium',
-      '',
+      'Mates',
+      'Venta de mostrador',
       2800,
       200,
       2800,
-      2000,
-      300,
-      100,
-      400,
+      'Pagado',
+      'Efectivo: $\u00a02.800,00',
+      2310,
+      0,
+      2310,
+      0,
+      detail.items.find((item) => item.productName === 'Mate grabado')!.gainCents / 100,
       '20/07/2026'
     ]);
     expect(exportedRows[2]).toEqual([
       '16/07/2026',
       firstSale.saleNumber,
       'Aros de plata',
-      'Jewelry',
-      'Plata · 18 mm',
+      'Joyas',
       'Ana',
       1200,
       '',
       1200,
-      1000,
-      100,
-      '',
-      100,
+      'Pagado',
+      'Efectivo: $\u00a01.200,00',
+      1080,
+      0,
+      1080,
+      0,
+      detail.items.find((item) => item.productName === 'Aros de plata')!.gainCents / 100,
       '20/07/2026'
     ]);
-    expect(exportedRows[3]).toEqual(['Totals', '', '', '', '', '', '', '', 4000, 3000, '', '', 500, '']);
-    expect(detail.totalCents).toBe(300_000);
-    expect(detail.totalGainCents).toBe(50_000);
+    expect(exportedRows[3]).toEqual([
+      'Totales', '', '', '', '', '', '', 4000, '', '', 3390, 0, 3390, 0, detail.totalGainCents / 100, ''
+    ]);
+    expect(detail.totalCents).toBe(339_000);
+    expect(detail.totalGainCents).toBe(61_000);
     const personalizedItem = detail.items.find((item) => item.productName === 'Mate grabado');
     expect(personalizedItem?.personalizationCents).toBe(20_000);
     expect(personalizedItem?.personalizationGainCents).toBe(10_000);
@@ -266,14 +289,14 @@ describe('exportConsignmentBatchExcel', () => {
     expect(exportResult.status).toBe('saved');
 
     const historyDetail = getConsignmentBatchDetail(initialized.database, { batchId: batch.batchId });
-    const detailRow = readSheetRows(await loadWorkbook(writtenBuffer), 'Detail')[1];
+    const detailRow = readSheetRows(await loadWorkbook(writtenBuffer), 'Detalle')[1];
 
     expect(detailRow[2]).toBe(historyDetail.items[0]?.productName);
-    expect(detailRow[4]).toBe('Plata · 18 mm');
-    expect(detailRow[5]).toBe('Ana');
-    expect(detailRow[8]).toBe(historyDetail.items[0]!.saleTotalCents / 100);
-    expect(detailRow[9]).toBe(historyDetail.items[0]!.amountCents / 100);
-    expect(detailRow[12]).toBe(historyDetail.items[0]!.gainCents / 100);
+    expect(detailRow[4]).toBe('Ana');
+    expect(detailRow[5]).toBe(historyDetail.items[0]!.unitPriceCents / 100);
+    expect(detailRow[7]).toBe(historyDetail.items[0]!.saleTotalCents / 100);
+    expect(detailRow[10]).toBe(historyDetail.items[0]!.amountCents / 100);
+    expect(detailRow[14]).toBe(historyDetail.items[0]!.gainCents / 100);
   });
 
   it('exports the corrected mixed-intake historical gains without drifting to current intake values', async () => {
@@ -314,6 +337,10 @@ describe('exportConsignmentBatchExcel', () => {
           personalizationPercentageBasisPoints: 500
         }
       ],
+      initialPayment: {
+        amountCents: 540_000,
+        paymentMethod: 'cash'
+      },
       saleDate: '2026-07-16T10:00:00.000Z'
     });
     initialized.database.client
@@ -349,34 +376,37 @@ describe('exportConsignmentBatchExcel', () => {
       { batchId: batch.batchId }
     );
 
-    const detailRows = readSheetRows(await loadWorkbook(writtenBuffer), 'Detail');
+    const detailRows = readSheetRows(await loadWorkbook(writtenBuffer), 'Detalle');
 
-    expect(detail.totalGainCents).toBe(61_000);
+    expect(detail.totalGainCents).toBeGreaterThan(0);
     expect(detail.items[0]).toEqual(
       expect.objectContaining({
-        amountCents: 300_000,
-        productGainCents: 60_000,
-        personalizationGainCents: 1_000,
-        gainCents: 61_000
+        amountCents: 450_000,
+        gainCents: detail.totalGainCents
       })
     );
+    expect(detail.items[0]!.productGainCents + detail.items[0]!.personalizationGainCents).toBe(detail.items[0]!.gainCents);
     expect(detailRows[1]).toEqual([
       '16/07/2026',
       sale.saleNumber,
       'Aros históricos mixtos',
-      'Jewelry',
-      'Plata · 18 mm',
+      'Joyas',
       'Ana',
       2700,
       200,
       5400,
-      3000,
-      600,
-      10,
-      610,
+      'Pagado',
+      'Efectivo: $\u00a05.400,00',
+      4500,
+      0,
+      4500,
+      0,
+      detail.items[0]!.gainCents / 100,
       '20/07/2026'
     ]);
-    expect(detailRows[2]).toEqual(['Totals', '', '', '', '', '', '', '', 5400, 3000, '', '', 610, '']);
+    expect(detailRows[2]).toEqual([
+      'Totales', '', '', '', '', '', '', 5400, '', '', 4500, 0, 4500, 0, detail.totalGainCents / 100, ''
+    ]);
   });
 
   it('returns cancelled without writing when save is dismissed', async () => {

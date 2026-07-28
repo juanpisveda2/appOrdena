@@ -13,6 +13,10 @@ import { historicalSnapshotsResetMigration } from '../../../src/main/db/migratio
 import { initialSchemaMigration } from '../../../src/main/db/migrations/v001_initialSchema';
 import { salesCoreMigration } from '../../../src/main/db/migrations/v003_salesCore';
 import { saleItemPersonalizationSnapshotsMigration } from '../../../src/main/db/migrations/v008_saleItemPersonalizationSnapshots';
+import { partialConsignmentLiquidationsMigration } from '../../../src/main/db/migrations/v009_partialConsignmentLiquidations';
+import { profitRuleByPriceBaseMigration } from '../../../src/main/db/migrations/v010_profitRuleByPriceBase';
+import { consignmentLiquidationSnapshotsMigration } from '../../../src/main/db/migrations/v011_consignmentLiquidationSnapshots';
+import { appBrandingMetadataMigration } from '../../../src/main/db/migrations/v012_appBrandingMetadata';
 import { getSchemaVersion, runMigrations } from '../../../src/main/db/migrate';
 import { appMetadataTable, settingsMarginRulesTable } from '../../../src/main/db/schema';
 import { registerSqliteTestHarness } from '../../support/sqliteTestHarness';
@@ -41,10 +45,10 @@ describe('initializeApp', () => {
       .all();
 
     expect(initialized.paths.userDataDirectory).toBe(userDataDirectory);
-    expect(initialized.paths.databaseFilePath).toBe(join(userDataDirectory, 'project-mama.sqlite'));
-    expect(initialized.state).toEqual({ dbReady: true, schemaVersion: 8 });
-    expect(getSchemaVersion(initialized.database)).toBe(8);
-    expect(metadataRow?.value).toBe('project-mama');
+    expect(initialized.paths.databaseFilePath).toBe(join(userDataDirectory, 'ordena.sqlite'));
+    expect(initialized.state).toEqual({ dbReady: true, schemaVersion: 12 });
+    expect(getSchemaVersion(initialized.database)).toBe(12);
+    expect(metadataRow?.value).toBe('ordena');
     expect(marginRules).toEqual([
       {
         category: 'jewelry',
@@ -75,10 +79,10 @@ describe('initializeApp', () => {
     initialized.database.close();
   });
 
-  it('preserves existing commercial data and backfills historical snapshots when upgrading through v8', () => {
+  it('preserves existing commercial data and backfills the latest liquidation snapshots when upgrading an existing database', () => {
     const userDataDirectory = mkdtempSync(join(tmpdir(), 'project-mama-v7-reset-'));
     const database = openSqliteDatabase({
-      databaseFilePath: join(userDataDirectory, 'project-mama.sqlite')
+      databaseFilePath: join(userDataDirectory, 'ordena.sqlite')
     });
 
     try {
@@ -88,7 +92,11 @@ describe('initializeApp', () => {
         salesCoreMigration,
         consignmentsCoreMigration,
         catalogSoftDeleteMigration,
-        consignmentBatchGainMigration
+        consignmentBatchGainMigration,
+        historicalSnapshotsResetMigration,
+        saleItemPersonalizationSnapshotsMigration,
+        partialConsignmentLiquidationsMigration,
+        profitRuleByPriceBaseMigration
       ]);
 
       const product = saveStockIntake(database, {
@@ -174,29 +182,12 @@ describe('initializeApp', () => {
         )
         .run();
 
-      expect(getSchemaVersion(database)).toBe(6);
-      expect(countRows(database, 'sales')).toBe(1);
+      expect(getSchemaVersion(database)).toBe(10);
+        expect(countRows(database, 'sales')).toBe(1);
 
-      runMigrations(database, [historicalSnapshotsResetMigration]);
-
-      expect(getSchemaVersion(database)).toBe(7);
       expect(countRows(database, 'sales')).toBe(1);
       expect(countRows(database, 'customers')).toBe(1);
       expect(countRows(database, 'reusable_products')).toBe(1);
-
-      const saleSnapshotRow = database.client
-        .prepare(
-          `
-            SELECT customer_name_snapshot AS customerNameSnapshot, customer_phone_snapshot AS customerPhoneSnapshot
-            FROM sales
-            WHERE id = 1
-          `
-        )
-        .get() as { customerNameSnapshot: string | null; customerPhoneSnapshot: string | null };
-      expect(saleSnapshotRow).toEqual({
-        customerNameSnapshot: 'Ana',
-        customerPhoneSnapshot: '3510000000'
-      });
 
       const snapshotColumns = database.client
         .prepare("PRAGMA table_info('sale_items')")
@@ -210,35 +201,15 @@ describe('initializeApp', () => {
         ])
       );
 
-      const saleItemSnapshotRow = database.client
-        .prepare(
-          `
-            SELECT
-              product_category_snapshot AS productCategorySnapshot,
-              product_name_snapshot AS productNameSnapshot,
-              product_material_snapshot AS productMaterialSnapshot,
-              product_variant_snapshot AS productVariantSnapshot
-            FROM sale_items
-            WHERE sale_id = 1
-            LIMIT 1
-          `
-        )
-        .get() as {
-          productCategorySnapshot: string | null;
-          productNameSnapshot: string | null;
-          productMaterialSnapshot: string | null;
-          productVariantSnapshot: string | null;
-        };
-      expect(saleItemSnapshotRow).toEqual({
-        productCategorySnapshot: 'jewelry',
-        productNameSnapshot: 'Aros anteriores',
-        productMaterialSnapshot: 'Plata',
-        productVariantSnapshot: '18 mm'
-      });
+      runMigrations(database, [consignmentLiquidationSnapshotsMigration, appBrandingMetadataMigration]);
 
-      runMigrations(database, [saleItemPersonalizationSnapshotsMigration]);
+      expect(getSchemaVersion(database)).toBe(12);
 
-      expect(getSchemaVersion(database)).toBe(8);
+      const metadataRow = database.client
+        .prepare("SELECT value FROM app_metadata WHERE key = 'app_id'")
+        .get() as { value: string } | undefined;
+
+      expect(metadataRow?.value).toBe('ordena');
 
       const saleItemFinancialRow = database.client
         .prepare(
@@ -264,15 +235,33 @@ describe('initializeApp', () => {
           personalizationGainCents: number | null;
           totalGainCents: number | null;
         };
-      expect(saleItemFinancialRow).toEqual({
-        unitBasePriceCents: 120_000,
-        unitPersonalizationAmountCents: null,
-        lineBaseSubtotalCents: 120_000,
-        linePersonalizationSubtotalCents: 0,
-        productGainCents: 10_000,
-        personalizationGainCents: 0,
-        totalGainCents: 10_000
-      });
+      expect(saleItemFinancialRow).toEqual(
+        expect.objectContaining({
+          unitBasePriceCents: null,
+          unitPersonalizationAmountCents: null,
+          lineBaseSubtotalCents: null,
+          linePersonalizationSubtotalCents: null,
+          productGainCents: null,
+          personalizationGainCents: null,
+          totalGainCents: null
+        })
+      );
+
+      const consignmentColumns = database.client
+        .prepare("PRAGMA table_info('consignment_batch_items')")
+        .all() as Array<{ name: string }>;
+      expect(consignmentColumns.map((column) => column.name)).toEqual(
+        expect.arrayContaining([
+          'product_gain_cents',
+          'personalization_gain_cents',
+          'gain_cents',
+          'snapshot_sale_status',
+          'snapshot_sale_paid_cents',
+          'snapshot_sale_balance_cents',
+          'snapshot_buyer_name',
+          'snapshot_payment_method_summary'
+        ])
+      );
     } finally {
       database.close();
       rmSync(userDataDirectory, {

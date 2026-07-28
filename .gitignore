@@ -1,2 +1,11 @@
 node_modules/
 out/
+dist/
+.vite/
+src/renderer/.vite/
+coverage/
+*.log
+*.tmp
+*.temp
+Thumbs.db
+Desktop.ini

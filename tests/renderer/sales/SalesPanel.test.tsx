@@ -1,9 +1,15 @@
+// @vitest-environment jsdom
+
 import React from 'react';
+import { act } from 'react';
+import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppBridge } from '../../../src/shared/contracts/app';
 import { SalesPanel } from '../../../src/renderer/features/sales/SalesPanel';
 import { createInitialSalesState } from '../../../src/renderer/features/sales/model';
+
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 function createBridge(): AppBridge {
   return {
@@ -38,6 +44,10 @@ function createBridge(): AppBridge {
 }
 
 describe('SalesPanel', () => {
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
   it('renders the draft flow with search, draft controls, customer feedback, and review entry', () => {
     const state = createInitialSalesState();
     state.searchResults = [
@@ -61,9 +71,9 @@ describe('SalesPanel', () => {
         availableQuantity: 2,
         cashPriceCents: 120000,
         listPriceCents: 125000,
-        expectedProfitCents: 10000,
+        cashExpectedProfitCents: 12000,
+        listExpectedProfitCents: 12500,
         personalizationExpectedProfitCents: null,
-        totalExpectedProfitCents: 10000,
         quantity: 1,
         priceType: 'cash'
       }
@@ -72,18 +82,24 @@ describe('SalesPanel', () => {
     const markup = renderToStaticMarkup(<SalesPanel bridge={createBridge()} initialState={state} />);
 
     expect(markup).toContain('Ventas');
-    expect(markup).toContain('Buscar producto');
-    expect(markup).toContain('Agregar a la venta');
-    expect(markup).toContain('Borrador de venta');
-    expect(markup).toContain('Quitar');
-    expect(markup).toContain('Cliente y pago inicial');
+    expect(markup).toContain('1. Buscar y agregar productos');
+    expect(markup).toContain('Sumar a la venta');
+    expect(markup).toContain('2. Armar venta');
+    expect(markup).toContain('Sacar');
+    expect(markup).toContain('3. Cliente y pago inicial');
+    expect(markup).not.toContain('Nueva venta');
+    expect(markup).not.toContain('Historial de ventas</p><h3');
+    expect(markup).not.toContain('Priorizá producto, cantidad, precio usado y subtotal. La personalización aparece solo cuando la necesitás.');
+    expect(markup).not.toContain('Nombre, categoría, material o variante');
     expect(markup).not.toContain('Ganancia: $ 100,00');
     expect(markup).not.toContain('<dt>Ganancia</dt>');
     expect(markup).toContain('Saldo');
     expect(markup).toContain('$ 1.200,00');
-    expect(markup).toContain('$ 100,00');
-    expect(markup).toContain('Ganancia total');
-    expect(markup).toContain('Revisar venta');
+    expect(markup).toContain('$ 120,00');
+    expect(markup).toContain('Ganancia producto');
+    expect(markup).not.toContain('Ganancia total');
+    expect(markup).toContain('Cierre rápido antes de revisar');
+    expect(markup).toContain('Seguir a revisión');
   });
 
   it('renders the review summary before confirmation', () => {
@@ -98,9 +114,9 @@ describe('SalesPanel', () => {
         availableQuantity: 2,
         cashPriceCents: 120000,
         listPriceCents: 125000,
-        expectedProfitCents: 10000,
+        cashExpectedProfitCents: 12000,
+        listExpectedProfitCents: 12500,
         personalizationExpectedProfitCents: null,
-        totalExpectedProfitCents: 10000,
         quantity: 1,
         priceType: 'cash'
       },
@@ -112,9 +128,9 @@ describe('SalesPanel', () => {
         availableQuantity: 3,
         cashPriceCents: 80000,
         listPriceCents: 85000,
-        expectedProfitCents: 8000,
+        cashExpectedProfitCents: 8000,
+        listExpectedProfitCents: 8500,
         personalizationExpectedProfitCents: 500,
-        totalExpectedProfitCents: 8500,
         quantity: 2,
         priceType: 'list'
       }
@@ -125,12 +141,13 @@ describe('SalesPanel', () => {
 
     const markup = renderToStaticMarkup(<SalesPanel bridge={createBridge()} initialState={state} />);
 
-    expect(markup).toContain('Resumen antes de confirmar');
+    expect(markup).toContain('4. Revisar y confirmar');
+    expect(markup).toContain('Lo que se va a guardar');
     expect(markup).toContain('Aros de plata');
     expect(markup).toContain('Pulsera de plata');
     expect(markup).toContain('Base: $ 1.200,00 · Total: $ 1.200,00');
     expect(markup).toContain('Base: $ 1.700,00 · Total: $ 1.700,00');
-    expect(markup).toContain('Datos de confirmación');
+    expect(markup).toContain('Cierre final');
     expect(markup).toContain('Cliente');
     expect(markup).toContain('Ana · 3510000000');
     expect(markup).toContain('Total');
@@ -139,10 +156,10 @@ describe('SalesPanel', () => {
     expect(markup).toContain('$ 1.000,00');
     expect(markup).toContain('Saldo');
     expect(markup).toContain('$ 1.900,00');
-    expect(markup).toContain('Ganancia total');
-    expect(markup).toContain('$ 270,00');
-    expect(markup).toContain('Volver a editar');
-    expect(markup).toContain('Confirmar venta');
+    expect(markup).toContain('Ganancia producto');
+    expect(markup).toContain('$ 290,00');
+    expect(markup).toContain('Volver y ajustar');
+    expect(markup).toContain('Confirmar y guardar venta');
   });
 
   it('renders the dedicated sales history list with a direct detail entry action', () => {
@@ -169,9 +186,63 @@ describe('SalesPanel', () => {
     expect(markup).toContain('Historial de ventas');
     expect(markup).toContain('Buscar por número, cliente o teléfono');
     expect(markup).toContain('Venta #12');
+    expect(markup).toContain('Fecha: 16/07/2026');
     expect(markup).toContain('Ana · 3510000000');
-    expect(markup).toContain('Ganancia total: $ 300,00');
-    expect(markup).toContain('Abrir detalle');
+    expect(markup).toContain('Cobrado: $ 200,00');
+    expect(markup).toContain('Ganancia: $ 300,00');
+    expect(markup).toContain('Ver detalle');
+  });
+
+  it('reuses the same history entry action when mounted from an external history CTA', async () => {
+    const bridge = createBridge();
+    vi.mocked(bridge.sales.listHistory).mockResolvedValue([]);
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(<SalesPanel bridge={bridge} entryPoint="history" />);
+      await Promise.resolve();
+    });
+
+    expect(bridge.sales.listHistory).toHaveBeenCalledWith({ query: '', limit: 60 });
+    expect(container.textContent).toContain('Historial de ventas');
+
+    await act(async () => {
+      root.unmount();
+      await Promise.resolve();
+    });
+  });
+
+  it('does not render out-of-stock products in the search/add flow', () => {
+    const state = createInitialSalesState();
+    state.searchStatus = 'ready';
+    state.searchResults = [
+      {
+        reusableProductId: 1,
+        category: 'jewelry',
+        name: 'Aros de plata',
+        material: 'Plata',
+        variant: '18 mm',
+        availableQuantity: 2,
+        isOutOfStock: false
+      },
+      {
+        reusableProductId: 2,
+        category: 'jewelry',
+        name: 'Anillo sin stock',
+        material: 'Plata',
+        variant: '10 mm',
+        availableQuantity: 0,
+        isOutOfStock: true
+      }
+    ];
+
+    const markup = renderToStaticMarkup(<SalesPanel bridge={createBridge()} initialState={state} />);
+
+    expect(markup).toContain('Aros de plata');
+    expect(markup).not.toContain('Anillo sin stock');
   });
 
   it('hides zero balances across history and confirmed detail views', () => {
@@ -196,6 +267,7 @@ describe('SalesPanel', () => {
     const historyMarkup = renderToStaticMarkup(<SalesPanel bridge={createBridge()} initialState={historyState} />);
 
     expect(historyMarkup).toContain('Total: $ 1.200,00');
+    expect(historyMarkup).toContain('Cobrado: $ 1.200,00');
     expect(historyMarkup).not.toContain('Saldo: $ 0,00');
 
     const detailState = createInitialSalesState();
@@ -240,9 +312,9 @@ describe('SalesPanel', () => {
         availableQuantity: 3,
         cashPriceCents: 80000,
         listPriceCents: 85000,
-        expectedProfitCents: 8000,
+        cashExpectedProfitCents: 8000,
+        listExpectedProfitCents: 8500,
         personalizationExpectedProfitCents: 500,
-        totalExpectedProfitCents: 8500,
         quantity: 1,
         priceType: 'list'
       }
@@ -250,7 +322,7 @@ describe('SalesPanel', () => {
 
     const markup = renderToStaticMarkup(<SalesPanel bridge={createBridge()} initialState={state} />);
 
-    expect(markup).toContain('Ganancia producto: $ 80,00 · Ganancia personalización: $ 5,00 · Ganancia total: $ 85,00');
+    expect(markup).toContain('Ganancia por lista: $ 85,00 · Ganancia personalización: $ 5,00 · Ganancia total: $ 90,00');
     expect(markup).toContain('<dt>Ganancia producto</dt>');
   });
 
@@ -265,9 +337,9 @@ describe('SalesPanel', () => {
         availableQuantity: 2,
         cashPriceCents: 120000,
         listPriceCents: 125000,
-        expectedProfitCents: 10000,
+        cashExpectedProfitCents: 12000,
+        listExpectedProfitCents: 12500,
         personalizationExpectedProfitCents: null,
-        totalExpectedProfitCents: 10000,
         quantity: 1,
         priceType: 'cash'
       }
@@ -276,8 +348,8 @@ describe('SalesPanel', () => {
 
     const draftMarkup = renderToStaticMarkup(<SalesPanel bridge={createBridge()} initialState={draftState} />);
 
-    expect(draftMarkup).toContain('Resumen rápido');
-    expect(draftMarkup).not.toContain('<dt>Saldo</dt>');
+    expect(draftMarkup).toContain('Cierre rápido antes de revisar');
+    expect(draftMarkup).toContain('Sin saldo pendiente');
 
     const reviewState = createInitialSalesState();
     reviewState.view = 'review';
@@ -286,7 +358,7 @@ describe('SalesPanel', () => {
 
     const reviewMarkup = renderToStaticMarkup(<SalesPanel bridge={createBridge()} initialState={reviewState} />);
 
-    expect(reviewMarkup).toContain('Datos de confirmación');
+    expect(reviewMarkup).toContain('Cierre final');
     expect(reviewMarkup).not.toContain('<dt>Saldo</dt>');
   });
 
@@ -302,9 +374,9 @@ describe('SalesPanel', () => {
         availableQuantity: 2,
         cashPriceCents: 120000,
         listPriceCents: 125000,
-        expectedProfitCents: 10000,
+        cashExpectedProfitCents: 12000,
+        listExpectedProfitCents: 12500,
         personalizationExpectedProfitCents: null,
-        totalExpectedProfitCents: 10000,
         quantity: 1,
         priceType: 'cash'
       }
@@ -312,9 +384,10 @@ describe('SalesPanel', () => {
 
     const markup = renderToStaticMarkup(<SalesPanel bridge={createBridge()} initialState={state} />);
 
-    expect(markup).toContain('Resumen antes de confirmar');
+    expect(markup).toContain('Lo que se va a guardar');
     expect(markup).not.toContain('<dt>Ganancia</dt>');
-    expect(markup).toContain('<dt>Ganancia total</dt>');
+    expect(markup).toContain('<dt>Ganancia producto</dt>');
+    expect(markup).not.toContain('<dt>Ganancia total</dt>');
     expect(markup).not.toContain('Ganancia: $ 100,00');
   });
 
@@ -382,14 +455,15 @@ describe('SalesPanel', () => {
     const markup = renderToStaticMarkup(<SalesPanel bridge={createBridge()} initialState={state} />);
 
     expect(markup).toContain('Resumen confirmado');
-    expect(markup).toContain('Ganancia total');
+    expect(markup).toContain('Ganancia producto');
     expect(markup).not.toContain('Ganancia por personalización');
-    expect(markup).toContain('Registrar pago');
+    expect(markup).toContain('Cargar pago');
     expect(markup).toContain('Guardar pago');
-    expect(markup).toContain('Motivo de cancelación del pago');
-    expect(markup).toContain('Cancelar pago');
+    expect(markup).toContain('Acciones delicadas sobre pagos');
+    expect(markup).toContain('Motivo para anular este pago');
+    expect(markup).toContain('Anular pago');
     expect(markup).toContain('Motivo de cancelación: Pago duplicado');
-    expect(markup).toContain('Cancelar venta');
+    expect(markup).toContain('Cancelar esta venta');
     expect(markup).toContain('Confirmar cancelación');
   });
 
@@ -433,7 +507,32 @@ describe('SalesPanel', () => {
     const markup = renderToStaticMarkup(<SalesPanel bridge={createBridge()} initialState={state} />);
 
     expect(markup).toContain('Volver al historial');
-    expect(markup).toContain('Asignar cliente para corregir pagos');
-    expect(markup).toContain('Guardar cliente para recuperación');
+    expect(markup).toContain('Acción especial para corregir pagos');
+    expect(markup).toContain('Guardar cliente para esta corrección');
+  });
+
+  it('renders history pagination after filtering results and honors the current page', () => {
+    const state = createInitialSalesState();
+    state.view = 'history';
+    state.historyStatus = 'ready';
+    state.historyPage = 2;
+    state.historyResults = Array.from({ length: 7 }, (_, index) => ({
+      saleId: index + 1,
+      saleNumber: 100 + index,
+      saleDate: '2026-07-16T10:00:00.000Z',
+      status: 'paid' as const,
+      totalCents: 10000 * (index + 1),
+      paidCents: 10000 * (index + 1),
+      balanceCents: 0,
+      customerName: `Cliente ${index + 1}`,
+      customerPhoneText: null,
+      totalProfitCents: 2000 * (index + 1)
+    }));
+
+    const markup = renderToStaticMarkup(<SalesPanel bridge={createBridge()} initialState={state} />);
+
+    expect(markup).toContain('Página 2 de 2');
+    expect(markup).toContain('Venta #106');
+    expect(markup).not.toContain('Venta #100');
   });
 });

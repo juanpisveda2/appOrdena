@@ -1,15 +1,15 @@
 import { Workbook, type Worksheet } from 'exceljs';
-import type { ConsignmentBatchDetail } from '../../shared/contracts/consignments';
+import type { ConsignmentBatchDetail, ConsignmentBatchDetailItem } from '../../shared/contracts/consignments';
 
 const CURRENCY_FORMAT = '[$$-es-AR] #,##0.00';
 
 export function buildConsignmentBatchExcelWorkbook(detail: ConsignmentBatchDetail, generatedAt: string): Workbook {
   const workbook = new Workbook();
 
-  workbook.creator = 'project-mama';
+  workbook.creator = 'Ordena';
   workbook.created = new Date(generatedAt);
-  workbook.title = `Liquidation ${detail.batchNumber}`;
-  workbook.subject = 'Liquidation Excel receipt';
+  workbook.title = `Liquidación ${detail.batchNumber}`;
+  workbook.subject = 'Comprobante Excel de liquidación';
 
   appendSummarySheet(workbook, detail);
   appendDetailSheet(workbook, detail);
@@ -24,16 +24,21 @@ export async function serializeWorkbook(workbook: Workbook): Promise<Buffer> {
 }
 
 function appendSummarySheet(workbook: Workbook, detail: ConsignmentBatchDetail): void {
-  const totalSoldCents = detail.items.reduce((sum, item) => sum + item.saleTotalCents, 0);
+  const uniqueSales = getUniqueSales(detail.items);
+  const totalSoldCents = uniqueSales.reduce((sum, item) => sum + item.saleTotalCents, 0);
+  const totalChargedCents = uniqueSales.reduce((sum, item) => sum + (item.salePaidCents ?? 0), 0);
   const rows: Array<Array<string | number>> = [
-    ['Liquidation number', detail.batchNumber],
-    ['Liquidation date', formatDate(detail.liquidationDate)],
-    ['Item count', detail.itemCount],
-    ['Total sold', toCurrency(totalSoldCents)],
-    ['Total paid to supplier', toCurrency(detail.totalCents)],
-    ['Total profit', toCurrency(detail.totalGainCents)]
+    ['Número de liquidación', detail.batchNumber],
+    ['Fecha de liquidación', formatDate(detail.liquidationDate)],
+    ['Cantidad de artículos', detail.itemCount],
+    ['Ventas incluidas', uniqueSales.length],
+    ['Total vendido', totalSoldCents / 100],
+    ['Total cobrado al cliente', totalChargedCents / 100],
+    ['Total liquidado al proveedor', detail.totalCents / 100],
+    ['Ganancia de la liquidación', detail.totalGainCents / 100],
+    ['Saldo proveedor después de liquidar', detail.remainingCents / 100]
   ];
-  const sheet = workbook.addWorksheet('Summary', {
+  const sheet = workbook.addWorksheet('Resumen', {
     views: [{ state: 'frozen', ySplit: 1, topLeftCell: 'A2' }]
   });
 
@@ -42,61 +47,67 @@ function appendSummarySheet(workbook: Workbook, detail: ConsignmentBatchDetail):
   });
 
   applyHeaderStyle(sheet, 1, 1);
-  applyCurrencyFormat(sheet, [4, 5, 6], [2]);
+  applyCurrencyFormat(sheet, [5, 6, 7, 8, 9], [2]);
   applyColumnWidths(sheet, rows);
 }
 
 function appendDetailSheet(workbook: Workbook, detail: ConsignmentBatchDetail): void {
   const headers = [
-    'Sale date',
-    'Sale number',
-    'Product',
-    'Category',
-    'Material / variant',
-    'Customer',
-    'Product price',
-    'Personalization',
-    'Sale total',
-    'Amount paid to supplier',
-    'Product gain',
-    'Personalization gain',
-    'Total gain',
-    'Liquidation date'
+    'Fecha de venta',
+    'Número de venta',
+    'Producto',
+    'Categoría',
+    'Cliente',
+    'Precio del producto',
+    'Personalización',
+    'Total de la venta',
+    'Estado de la venta',
+    'Método de pago',
+    'A liquidar ahora',
+    'Liquidado anteriormente',
+    'Acumulado liquidado',
+    'Saldo proveedor después de liquidar',
+    'Ganancia del lote',
+    'Fecha de liquidación'
   ];
   const body = detail.items.map((item) => [
     formatDate(item.saleDate),
     item.saleNumber,
     item.productName,
     formatCategory(item.category),
-    buildMaterialVariantLabel(item.material, item.variant),
-    item.buyerName?.trim() ? item.buyerName : '',
-    toCurrency(item.unitPriceCents),
-    item.personalizationCents == null ? '' : toCurrency(item.personalizationCents),
-    toCurrency(item.saleTotalCents),
-    toCurrency(item.amountCents),
-    toCurrency(item.productGainCents),
-    item.personalizationGainCents === 0 ? '' : toCurrency(item.personalizationGainCents),
-    toCurrency(item.gainCents),
+    item.buyerName?.trim() ? item.buyerName : 'Venta de mostrador',
+    item.unitPriceCents / 100,
+    item.personalizationCents == null ? '' : item.personalizationCents / 100,
+    item.saleTotalCents / 100,
+    formatSaleStatus(item.saleStatus),
+    item.paymentMethodSummary ?? 'Sin pagos registrados',
+    item.amountCents / 100,
+    (item.liquidatedPreviouslyCents ?? 0) / 100,
+    (item.totalAccumulatedCents ?? item.amountCents) / 100,
+    (item.remainingBalanceCents ?? 0) / 100,
+    item.gainCents / 100,
     formatDate(item.liquidationDate)
   ]);
   const totalsRow: Array<string | number> = [
-    'Totals',
+    'Totales',
     '',
     '',
     '',
     '',
     '',
     '',
-    '',
-    toCurrency(detail.items.reduce((sum, item) => sum + item.saleTotalCents, 0)),
-    toCurrency(detail.totalCents),
+    getUniqueSales(detail.items).reduce((sum, item) => sum + item.saleTotalCents, 0) / 100,
     '',
     '',
-    toCurrency(detail.totalGainCents),
+    detail.totalCents / 100,
+    detail.items.reduce((sum, item) => sum + (item.liquidatedPreviouslyCents ?? 0), 0) / 100,
+    detail.items.reduce((sum, item) => sum + (item.totalAccumulatedCents ?? item.amountCents), 0) / 100,
+    detail.remainingCents / 100,
+    detail.totalGainCents / 100,
     ''
   ];
   const rows = [headers, ...(body.length > 0 ? body : [Array.from({ length: headers.length }, () => '')]), totalsRow];
-  const sheet = workbook.addWorksheet('Detail', {
+  const sheet = workbook.addWorksheet('Detalle', {
     views: [{ state: 'frozen', ySplit: 1, topLeftCell: 'A2' }]
   });
 
@@ -106,12 +117,20 @@ function appendDetailSheet(workbook: Workbook, detail: ConsignmentBatchDetail): 
 
   applyHeaderStyle(sheet, 1, headers.length);
   applyHeaderStyle(sheet, rows.length, 1);
-  applyCurrencyFormat(
-    sheet,
-    Array.from({ length: rows.length - 1 }, (_, index) => index + 2),
-    [7, 8, 9, 10, 11, 12, 13]
-  );
+  applyCurrencyFormat(sheet, Array.from({ length: rows.length - 1 }, (_, index) => index + 2), [6, 7, 8, 11, 12, 13, 14, 15]);
   applyColumnWidths(sheet, rows);
+}
+
+function getUniqueSales(items: ConsignmentBatchDetailItem[]): ConsignmentBatchDetailItem[] {
+  const bySaleNumber = new Map<number, ConsignmentBatchDetailItem>();
+
+  items.forEach((item) => {
+    if (!bySaleNumber.has(item.saleNumber)) {
+      bySaleNumber.set(item.saleNumber, item);
+    }
+  });
+
+  return Array.from(bySaleNumber.values());
 }
 
 function autoFitColumns(rows: Array<Array<string | number>>): number[] {
@@ -151,20 +170,31 @@ function applyColumnWidths(sheet: Worksheet, rows: Array<Array<string | number>>
   });
 }
 
-function buildMaterialVariantLabel(material: string, variant: string): string {
-  return [material, variant].filter((value) => value.trim().length > 0).join(' · ');
-}
-
 function formatCategory(value: string): string {
   switch (value) {
     case 'jewelry':
-      return 'Jewelry';
+      return 'Joyas';
     case 'mate':
-      return 'Mate products';
+      return 'Mates';
     case 'clothing':
-      return 'Clothing';
+      return 'Ropa';
     default:
       return value;
+  }
+}
+
+function formatSaleStatus(value?: string): string {
+  switch (value) {
+    case 'pending_payment':
+      return 'Pago pendiente';
+    case 'partial_payment':
+      return 'Pago parcial';
+    case 'paid':
+      return 'Pagado';
+    case 'cancelled':
+      return 'Cancelado';
+    default:
+      return 'Sin estado';
   }
 }
 
@@ -180,14 +210,10 @@ function formatDate(value: string): string {
     return value;
   }
 
-  return new Intl.DateTimeFormat('en-GB', {
+  return new Intl.DateTimeFormat('es-AR', {
     timeZone: 'America/Argentina/Buenos_Aires',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit'
   }).format(date);
-}
-
-function toCurrency(cents: number): number {
-  return cents / 100;
 }

@@ -55,6 +55,7 @@ export const stockIntakesTable = sqliteTable(
     listPriceCents: integer('list_price_cents').notNull(),
     profitPercentageBasisPoints: integer('profit_percentage_basis_points').notNull(),
     expectedProfitCents: integer('expected_profit_cents').notNull(),
+    expectedListProfitCents: integer('expected_list_profit_cents').notNull().default(0),
     personalizationAmountCents: integer('personalization_amount_cents'),
     personalizationPercentageBasisPoints: integer('personalization_percentage_basis_points'),
     personalizationExpectedProfitCents: integer('personalization_expected_profit_cents'),
@@ -200,6 +201,7 @@ export const consignmentBatchesTable = sqliteTable(
     liquidationDate: text('liquidation_date').notNull(),
     totalCents: integer('total_cents').notNull(),
     totalGainCents: integer('total_gain_cents').notNull().default(0),
+    remainingCents: integer('remaining_cents').notNull().default(0),
     notes: text('notes'),
     createdAt: text('created_at').notNull().default(sql`CURRENT_TIMESTAMP`)
   },
@@ -220,6 +222,14 @@ export const consignmentBatchItemsTable = sqliteTable(
       .notNull()
       .references(() => saleItemsTable.id),
     amountCents: integer('amount_cents').notNull(),
+    productGainCents: integer('product_gain_cents').notNull().default(0),
+    personalizationGainCents: integer('personalization_gain_cents').notNull().default(0),
+    gainCents: integer('gain_cents').notNull().default(0),
+    snapshotSaleStatus: text('snapshot_sale_status'),
+    snapshotSalePaidCents: integer('snapshot_sale_paid_cents'),
+    snapshotSaleBalanceCents: integer('snapshot_sale_balance_cents'),
+    snapshotBuyerName: text('snapshot_buyer_name'),
+    snapshotPaymentMethodSummary: text('snapshot_payment_method_summary'),
     createdAt: text('created_at').notNull().default(sql`CURRENT_TIMESTAMP`)
   },
   (table) => ({

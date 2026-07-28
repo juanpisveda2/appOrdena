@@ -9,17 +9,24 @@ import type {
   ListPendingConsignmentItemsRequest,
   PendingConsignmentItem
 } from '../../../shared/contracts/consignments';
+import type { SaleStatus } from '../../../shared/contracts/sales';
 import {
   confirmConsignmentBatchRequestSchema,
   getConsignmentBatchDetailRequestSchema,
   listConsignmentBatchHistoryRequestSchema,
   listPendingConsignmentItemsRequestSchema
 } from '../../../shared/validation/consignments';
+import {
+  allocateConsignmentBatchGain,
+  calculateSupplierLiquidationTotalCents,
+  allocateSaleLiquidationAmounts,
+  summarizeConsignmentLiquidationSelection,
+  type ConsignmentLiquidationSourceItem
+} from '../../../shared/consignments/liquidation';
 import type { SqliteDatabaseLike } from '../../db/connection';
 import {
-  loadHistoricalSaleItemFinancialsMap,
-  loadHistoricalSaleItemProfitMap,
-  sumHistoricalSaleItemProfits
+  type HistoricalSaleItemFinancials,
+  loadHistoricalSaleItemFinancialsMap
 } from '../sales/profit';
 
 const STATUS_CANCELLED = 'cancelled';
@@ -32,8 +39,8 @@ export type ConsignmentServiceErrorCode =
   | 'SALE_ITEMS_NOT_FOUND'
   | 'CANCELLED_SALE_ITEM'
   | 'SALE_ITEM_NOT_PENDING_SETTLEMENT'
-  | 'SALE_ITEM_ALREADY_ASSOCIATED'
   | 'SALE_ITEM_WITHOUT_HISTORICAL_COST'
+  | 'NO_LIQUIDATION_DUE'
   | 'BATCH_NOT_FOUND';
 
 export class ConsignmentServiceError extends Error {
@@ -47,25 +54,29 @@ export class ConsignmentServiceError extends Error {
 }
 
 interface PendingRow {
+  saleId: number;
+  saleStatus: SaleStatus;
   saleItemId: number;
   productName: string;
   saleNumber: number;
   saleDate: string;
   buyerName: string | null;
-  amountCents: number;
+  saleTotalCents: number;
+  salePaidCents: number;
+  saleBalanceCents: number;
+  supplierTotalToLiquidateCents: number;
+  liquidatedPreviouslyCents: number;
   gainCents: number;
 }
 
 interface SaleItemValidationRow {
   saleItemId: number;
   saleNumber: number;
-  saleStatus: string;
+  saleId: number;
+  saleStatus: SaleStatus;
   consignmentStatus: string;
-}
-
-interface HistoricalAmountRow {
-  saleItemId: number;
-  amountCents: number;
+  salePaidCents: number;
+  saleBalanceCents: number;
 }
 
 interface BatchHistoryRow extends ConsignmentBatchHistoryListItem {}
@@ -76,6 +87,7 @@ interface BatchDetailHeaderRow {
   liquidationDate: string;
   totalCents: number;
   totalGainCents: number;
+  remainingCents: number;
   notes: string | null;
   createdAt: string;
   itemCount: number;
@@ -83,10 +95,7 @@ interface BatchDetailHeaderRow {
 
 interface BatchDetailItemRow extends ConsignmentBatchDetailItem {
   saleItemId: number;
-}
-
-interface BatchSaleItemRow {
-  saleItemId: number;
+  saleId: number;
 }
 
 export function listPendingConsignmentItems(
@@ -96,39 +105,10 @@ export function listPendingConsignmentItems(
   const payload = listPendingConsignmentItemsRequestSchema.parse(request);
   const limit = payload.limit ?? 200;
 
-  const rows = database.client
-    .prepare(
-      `
-        SELECT
-          si.id AS saleItemId,
-          si.product_name_snapshot AS productName,
-          s.sale_number AS saleNumber,
-          s.sale_date AS saleDate,
-          s.customer_name_snapshot AS buyerName,
-          COALESCE(SUM(sia.consumed_quantity * sia.historical_supplier_unit_cost_cents), 0) AS amountCents,
-          0 AS gainCents
-        FROM sale_items si
-        INNER JOIN sales s ON s.id = si.sale_id
-        INNER JOIN sale_item_allocations sia ON sia.sale_item_id = si.id
-        LEFT JOIN consignment_batch_items cbi ON cbi.sale_item_id = si.id
-        WHERE s.status <> ?
-          AND si.consignment_status = ?
-          AND cbi.id IS NULL
-        GROUP BY si.id, si.product_name_snapshot, s.sale_number, s.sale_date, s.customer_name_snapshot
-        ORDER BY s.sale_date DESC, s.sale_number DESC, si.id DESC
-        LIMIT ?
-      `
-    )
-    .all(STATUS_CANCELLED, STATUS_PENDING_SETTLEMENT, limit) as PendingRow[];
-
-  const profitMap = loadHistoricalSaleItemProfitMap(
-    database,
-    rows.map((row) => row.saleItemId)
-  );
-
-  return rows.map((row) => ({
+  return loadPendingConsignmentRows(database, limit).map(({ supplierTotalToLiquidateCents, ...row }) => ({
     ...row,
-    gainCents: sumHistoricalSaleItemProfits(profitMap, [row.saleItemId])
+    saleStatus: row.saleStatus as PendingConsignmentItem['saleStatus'],
+    amountCents: Math.max(supplierTotalToLiquidateCents - row.liquidatedPreviouslyCents, 0)
   }));
 }
 
@@ -143,23 +123,75 @@ export function confirmConsignmentBatch(
   const createdAt = new Date().toISOString();
 
   const transaction = database.client.transaction(() => {
-    const saleItems = loadSaleItemsForSettlement(database, normalizedIds);
-    const historicalAmounts = loadHistoricalAmounts(database, normalizedIds);
-    const totalCents = normalizedIds.reduce((sum, saleItemId) => {
-      const amount = historicalAmounts.get(saleItemId);
+    const selectedSaleItems = loadSaleItemsForSettlement(database, normalizedIds);
+    const pendingRows = loadPendingConsignmentRows(database);
+    const pendingRowsBySaleItemId = new Map(pendingRows.map((row) => [row.saleItemId, row]));
 
-      if (amount == null) {
+    selectedSaleItems.forEach((saleItem) => {
+      const source = pendingRowsBySaleItemId.get(saleItem.saleItemId);
+
+      if (!source || source.supplierTotalToLiquidateCents <= 0) {
         throw new ConsignmentServiceError(
           'SALE_ITEM_WITHOUT_HISTORICAL_COST',
-          `Sale item ${saleItemId} does not have historical cost allocations.`
+          `Sale item ${saleItem.saleItemId} does not have a liquidation base.`
         );
       }
+    });
 
-      return sum + amount.amountCents;
-    }, 0);
-    const totalGainCents = sumHistoricalSaleItemProfits(
-      loadHistoricalSaleItemProfitMap(database, normalizedIds),
+    const allocationSummary = summarizeConsignmentLiquidationSelection(
+      pendingRows,
       normalizedIds
+    );
+
+    if (allocationSummary.totalDueNowCents <= 0) {
+      throw new ConsignmentServiceError(
+        'NO_LIQUIDATION_DUE',
+        'The selected consignment items have no remaining liquidation amount right now.'
+      );
+    }
+
+    const financialsMap = loadHistoricalSaleItemFinancialsMap(database, normalizedIds);
+    const paymentSummaryMap = buildPaymentSummaryMap(
+      database,
+      [...new Set(selectedSaleItems.map((saleItem) => saleItem.saleId))]
+    );
+    const selectedAllocationMap = new Map(
+      allocationSummary.items.map((item) => [item.saleItemId, item])
+    );
+    const batchGainBySaleItemId = new Map<number, HistoricalSaleItemFinancials>();
+
+    normalizedIds.forEach((saleItemId) => {
+      const source = pendingRowsBySaleItemId.get(saleItemId);
+      const allocation = selectedAllocationMap.get(saleItemId);
+      const financials = financialsMap.get(saleItemId);
+
+      if (!source || !allocation || !financials) {
+        return;
+      }
+
+      const batchGain = allocateConsignmentBatchGain({
+        supplierTotalToLiquidateCents: source.supplierTotalToLiquidateCents,
+        liquidatedPreviouslyCents: source.liquidatedPreviouslyCents,
+        amountToLiquidateCents: allocation.amountDueNowCents,
+        productHistoricalGainCents: financials.productGainCents,
+        personalizationHistoricalGainCents: financials.personalizationGainCents
+      });
+
+      batchGainBySaleItemId.set(saleItemId, {
+        personalizationCents: financials.personalizationCents,
+        productGainCents: batchGain.productGainCents,
+        personalizationGainCents: batchGain.personalizationGainCents,
+        totalGainCents: batchGain.gainCents
+      });
+    });
+
+    const totalGainCents = normalizedIds.reduce(
+      (sum, saleItemId) => sum + (batchGainBySaleItemId.get(saleItemId)?.totalGainCents ?? 0),
+      0
+    );
+    const remainingCents = Math.max(
+      allocationSummary.totalRemainingBalanceCents - allocationSummary.totalDueNowCents,
+      0
     );
 
     const batchNumber = nextBatchNumber(database);
@@ -171,12 +203,21 @@ export function confirmConsignmentBatch(
             liquidation_date,
             total_cents,
             total_gain_cents,
+            remaining_cents,
             notes,
             created_at
-          ) VALUES (?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)
         `
       )
-      .run(batchNumber, liquidationDate, totalCents, totalGainCents, notes, createdAt);
+      .run(
+        batchNumber,
+        liquidationDate,
+        allocationSummary.totalDueNowCents,
+        totalGainCents,
+        remainingCents,
+        notes,
+        createdAt
+      );
     const batchId = Number(batchInsert.lastInsertRowid);
     const batchItemInsert = database.client.prepare(
       `
@@ -184,24 +225,66 @@ export function confirmConsignmentBatch(
           batch_id,
           sale_item_id,
           amount_cents,
+          product_gain_cents,
+          personalization_gain_cents,
+          gain_cents,
+          snapshot_sale_status,
+          snapshot_sale_paid_cents,
+          snapshot_sale_balance_cents,
+          snapshot_buyer_name,
+          snapshot_payment_method_summary,
           created_at
-        ) VALUES (?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `
     );
 
-    normalizedIds.forEach((saleItemId) => {
-      batchItemInsert.run(batchId, saleItemId, historicalAmounts.get(saleItemId)?.amountCents, createdAt);
+    const selectedAllocations = allocationSummary.items.filter((item) => normalizedIds.includes(item.saleItemId));
+
+    selectedAllocations.forEach((allocation) => {
+      if (allocation.amountDueNowCents > 0) {
+        const source = pendingRowsBySaleItemId.get(allocation.saleItemId);
+        const batchGain = batchGainBySaleItemId.get(allocation.saleItemId);
+
+        batchItemInsert.run(
+          batchId,
+          allocation.saleItemId,
+          allocation.amountDueNowCents,
+          batchGain?.productGainCents ?? 0,
+          batchGain?.personalizationGainCents ?? 0,
+          batchGain?.totalGainCents ?? 0,
+          source?.saleStatus ?? null,
+          source?.salePaidCents ?? null,
+          source?.saleBalanceCents ?? null,
+          source?.buyerName ?? null,
+          paymentSummaryMap.get(source?.saleId ?? 0) ?? 'Sin pagos registrados',
+          createdAt
+        );
+      }
     });
 
-    database.client
-      .prepare(
-        `
-          UPDATE sale_items
-          SET consignment_status = ?
-          WHERE id IN (${createPlaceholders(normalizedIds.length)})
-        `
-      )
-      .run(STATUS_SETTLED, ...normalizedIds);
+    selectedSaleItems.forEach((saleItem) => {
+      const source = pendingRowsBySaleItemId.get(saleItem.saleItemId);
+
+      if (!source) {
+        return;
+      }
+
+      const amountDueNowCents = allocationSummary.items.find((item) => item.saleItemId === saleItem.saleItemId)?.amountDueNowCents ?? 0;
+      const accumulated = (source.liquidatedPreviouslyCents ?? 0) + amountDueNowCents;
+      const historicalAmount = source.supplierTotalToLiquidateCents;
+
+      if (accumulated >= historicalAmount) {
+        database.client
+          .prepare(
+            `
+              UPDATE sale_items
+              SET consignment_status = ?
+              WHERE id = ?
+            `
+          )
+          .run(STATUS_SETTLED, saleItem.saleItemId);
+      }
+    });
 
     insertAuditLog(database, {
       occurredAt: createdAt,
@@ -214,8 +297,8 @@ export function confirmConsignmentBatch(
         batchNumber,
         liquidationDate,
         saleItemIds: normalizedIds,
-        quantity: saleItems.length,
-        totalCents,
+        quantity: selectedSaleItems.length,
+        totalCents: allocationSummary.totalDueNowCents,
         totalGainCents,
         note: notes,
         createdAt
@@ -226,9 +309,10 @@ export function confirmConsignmentBatch(
       batchId,
       batchNumber,
       liquidationDate,
-      itemCount: saleItems.length,
-      totalCents,
+      itemCount: selectedAllocations.filter((item) => item.amountDueNowCents > 0).length,
+      totalCents: allocationSummary.totalDueNowCents,
       totalGainCents,
+      remainingCents,
       notes,
       createdAt
     };
@@ -253,12 +337,13 @@ export function listConsignmentBatchHistory(
           cb.liquidation_date AS liquidationDate,
           cb.total_cents AS totalCents,
           cb.total_gain_cents AS totalGainCents,
+          cb.remaining_cents AS remainingCents,
           cb.notes AS notes,
           cb.created_at AS createdAt,
           COUNT(cbi.id) AS itemCount
         FROM consignment_batches cb
         INNER JOIN consignment_batch_items cbi ON cbi.batch_id = cb.id
-        GROUP BY cb.id, cb.batch_number, cb.liquidation_date, cb.total_cents, cb.total_gain_cents, cb.notes, cb.created_at
+        GROUP BY cb.id, cb.batch_number, cb.liquidation_date, cb.total_cents, cb.total_gain_cents, cb.remaining_cents, cb.notes, cb.created_at
         ORDER BY cb.liquidation_date DESC, cb.batch_number DESC, cb.id DESC
         LIMIT ?
       `
@@ -282,13 +367,14 @@ export function getConsignmentBatchDetail(
           cb.liquidation_date AS liquidationDate,
           cb.total_cents AS totalCents,
           cb.total_gain_cents AS totalGainCents,
+          cb.remaining_cents AS remainingCents,
           cb.notes AS notes,
           cb.created_at AS createdAt,
           COUNT(cbi.id) AS itemCount
         FROM consignment_batches cb
         INNER JOIN consignment_batch_items cbi ON cbi.batch_id = cb.id
         WHERE cb.id = ?
-        GROUP BY cb.id, cb.batch_number, cb.liquidation_date, cb.total_cents, cb.total_gain_cents, cb.notes, cb.created_at
+        GROUP BY cb.id, cb.batch_number, cb.liquidation_date, cb.total_cents, cb.total_gain_cents, cb.remaining_cents, cb.notes, cb.created_at
         LIMIT 1
       `
     )
@@ -302,6 +388,11 @@ export function getConsignmentBatchDetail(
     .prepare(
       `
         SELECT
+          cbi.id AS batchItemId,
+          s.id AS saleId,
+          COALESCE(cbi.snapshot_sale_status, s.status) AS saleStatus,
+          COALESCE(cbi.snapshot_sale_paid_cents, s.paid_cents) AS salePaidCents,
+          COALESCE(cbi.snapshot_sale_balance_cents, s.balance_cents) AS saleBalanceCents,
           si.id AS saleItemId,
           si.product_name_snapshot AS productName,
           si.product_category_snapshot AS category,
@@ -309,14 +400,20 @@ export function getConsignmentBatchDetail(
           si.product_variant_snapshot AS variant,
           s.sale_number AS saleNumber,
           s.sale_date AS saleDate,
-          s.customer_name_snapshot AS buyerName,
+          COALESCE(cbi.snapshot_buyer_name, s.customer_name_snapshot) AS buyerName,
           si.unit_price_cents AS unitPriceCents,
           si.line_subtotal_cents AS saleTotalCents,
           cbi.amount_cents AS amountCents,
-          0 AS personalizationCents,
-          0 AS productGainCents,
-          0 AS personalizationGainCents,
-          0 AS gainCents,
+          cbi.product_gain_cents AS productGainCents,
+          cbi.personalization_gain_cents AS personalizationGainCents,
+          cbi.gain_cents AS gainCents,
+          cbi.snapshot_payment_method_summary AS paymentMethodSummary,
+          COALESCE((
+            SELECT SUM(previous.amount_cents)
+            FROM consignment_batch_items previous
+            WHERE previous.sale_item_id = si.id
+              AND previous.id < cbi.id
+          ), 0) AS liquidatedPreviouslyCents,
           cb.liquidation_date AS liquidationDate
         FROM consignment_batch_items cbi
         INNER JOIN consignment_batches cb ON cb.id = cbi.batch_id
@@ -328,18 +425,40 @@ export function getConsignmentBatchDetail(
     )
     .all(payload.batchId) as BatchDetailItemRow[];
 
-  const saleItemIds = getBatchSaleItemIds(database, payload.batchId);
+  const saleItemIds = items.map((item) => item.saleItemId);
   const financialsMap = loadHistoricalSaleItemFinancialsMap(database, saleItemIds);
+  const paymentSummaryMap = buildPaymentSummaryMap(database, [...new Set(items.map((item) => item.saleId))]);
+  const normalizedItems = items.map(({ saleId, saleItemId, liquidatedPreviouslyCents = 0, ...item }) => {
+    const historicalFinancials = financialsMap.get(saleItemId);
+    const historicalAmountCents = calculateSupplierLiquidationTotalCents(
+      item.saleTotalCents,
+      historicalFinancials?.productGainCents ?? item.productGainCents,
+      historicalFinancials?.totalGainCents ?? item.gainCents
+    );
+    const totalAccumulatedCents = liquidatedPreviouslyCents + item.amountCents;
+
+    return {
+      ...item,
+      saleStatus: item.saleStatus as ConsignmentBatchDetailItem['saleStatus'],
+      salePaidCents: item.salePaidCents,
+      saleBalanceCents: item.saleBalanceCents,
+      paymentMethodSummary: item.paymentMethodSummary?.trim()
+        ? item.paymentMethodSummary
+        : (paymentSummaryMap.get(saleId) ?? 'Sin pagos registrados'),
+      personalizationCents: financialsMap.get(saleItemId)?.personalizationCents ?? null,
+      productGainCents: item.productGainCents,
+      personalizationGainCents: item.personalizationGainCents,
+      gainCents: item.gainCents,
+      liquidatedPreviouslyCents,
+      totalAccumulatedCents,
+      remainingBalanceCents: Math.max(historicalAmountCents - totalAccumulatedCents, 0)
+    };
+  });
 
   return {
     ...header,
-    items: items.map(({ saleItemId, ...item }) => ({
-      ...item,
-      personalizationCents: financialsMap.get(saleItemId)?.personalizationCents ?? null,
-      productGainCents: financialsMap.get(saleItemId)?.productGainCents ?? 0,
-      personalizationGainCents: financialsMap.get(saleItemId)?.personalizationGainCents ?? 0,
-      gainCents: financialsMap.get(saleItemId)?.totalGainCents ?? 0
-    }))
+    remainingCents: header.remainingCents,
+    items: normalizedItems
   };
 }
 
@@ -370,9 +489,12 @@ function loadSaleItemsForSettlement(
       `
         SELECT
           si.id AS saleItemId,
+          s.id AS saleId,
           s.sale_number AS saleNumber,
           s.status AS saleStatus,
-          si.consignment_status AS consignmentStatus
+          si.consignment_status AS consignmentStatus,
+          s.paid_cents AS salePaidCents,
+          s.balance_cents AS saleBalanceCents
         FROM sale_items si
         INNER JOIN sales s ON s.id = si.sale_id
         WHERE si.id IN (${createPlaceholders(saleItemIds.length)})
@@ -384,23 +506,6 @@ function loadSaleItemsForSettlement(
     throw new ConsignmentServiceError(
       'SALE_ITEMS_NOT_FOUND',
       'One or more selected sale items were not found.'
-    );
-  }
-
-  const associatedRows = database.client
-    .prepare(
-      `
-        SELECT sale_item_id AS saleItemId
-        FROM consignment_batch_items
-        WHERE sale_item_id IN (${createPlaceholders(saleItemIds.length)})
-      `
-    )
-    .all(...saleItemIds) as Array<{ saleItemId: number }>;
-
-  if (associatedRows.length > 0) {
-    throw new ConsignmentServiceError(
-      'SALE_ITEM_ALREADY_ASSOCIATED',
-      `Sale item ${associatedRows[0]?.saleItemId} is already associated with a consignment batch.`
     );
   }
 
@@ -423,37 +528,164 @@ function loadSaleItemsForSettlement(
   return rows;
 }
 
-function loadHistoricalAmounts(
-  database: SqliteDatabaseLike,
-  saleItemIds: number[]
-): Map<number, { amountCents: number }> {
+function loadPendingConsignmentRows(database: SqliteDatabaseLike, limit?: number): PendingRow[] {
+  const query = `
+    WITH liquidations AS (
+      SELECT
+        sale_item_id AS saleItemId,
+        COALESCE(SUM(amount_cents), 0) AS liquidatedPreviouslyCents
+      FROM consignment_batch_items
+      GROUP BY sale_item_id
+    )
+    SELECT
+      si.id AS saleItemId,
+      s.id AS saleId,
+      s.status AS saleStatus,
+      s.sale_number AS saleNumber,
+      s.sale_date AS saleDate,
+      s.customer_name_snapshot AS buyerName,
+      si.line_subtotal_cents AS saleTotalCents,
+      s.paid_cents AS salePaidCents,
+      s.balance_cents AS saleBalanceCents,
+      si.product_name_snapshot AS productName,
+      COALESCE(liquidations.liquidatedPreviouslyCents, 0) AS liquidatedPreviouslyCents
+    FROM sale_items si
+    INNER JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN liquidations ON liquidations.saleItemId = si.id
+    WHERE s.status <> ?
+      AND si.consignment_status = ?
+    ORDER BY s.sale_date DESC, s.sale_number DESC, si.id DESC
+    ${limit == null ? '' : 'LIMIT ?'}
+  `;
+
+  const rows = limit == null
+    ? (database.client.prepare(query).all(STATUS_CANCELLED, STATUS_PENDING_SETTLEMENT) as PendingRow[])
+    : (database.client.prepare(query).all(STATUS_CANCELLED, STATUS_PENDING_SETTLEMENT, limit) as PendingRow[]);
+
+  return hydratePendingRowGains(database, rows);
+}
+
+function hydratePendingRowGains(database: SqliteDatabaseLike, rows: PendingRow[]): PendingRow[] {
+  const financialsMap = loadHistoricalSaleItemFinancialsMap(
+    database,
+    rows.map((row) => row.saleItemId)
+  );
+  const rowsBySaleId = new Map<number, PendingRow[]>();
+
+  rows.forEach((row) => {
+    const current = rowsBySaleId.get(row.saleId) ?? [];
+    current.push(row);
+    rowsBySaleId.set(row.saleId, current);
+  });
+
+  const gainBySaleItemId = new Map<number, number>();
+
+  rowsBySaleId.forEach((saleRows) => {
+    const liquidationRows = saleRows.map((row) => {
+      const financials = financialsMap.get(row.saleItemId);
+
+      return {
+        ...row,
+        supplierTotalToLiquidateCents: calculateSupplierLiquidationTotalCents(
+          row.saleTotalCents,
+          financials?.productGainCents ?? 0,
+          financials?.totalGainCents ?? 0
+        )
+      };
+    });
+    const allocationPlan = allocateSaleLiquidationAmounts(liquidationRows);
+
+    allocationPlan.forEach((allocation) => {
+      const financials = financialsMap.get(allocation.saleItemId);
+
+      if (!financials) {
+        gainBySaleItemId.set(allocation.saleItemId, 0);
+        return;
+      }
+
+      gainBySaleItemId.set(
+        allocation.saleItemId,
+        allocateConsignmentBatchGain({
+          supplierTotalToLiquidateCents: allocation.supplierTotalToLiquidateCents,
+          liquidatedPreviouslyCents: allocation.liquidatedPreviouslyCents,
+          amountToLiquidateCents: allocation.amountDueNowCents,
+          productHistoricalGainCents: financials.productGainCents,
+          personalizationHistoricalGainCents: financials.personalizationGainCents
+        }).gainCents
+      );
+    });
+  });
+
+  return rows.map((row) => ({
+    ...row,
+    supplierTotalToLiquidateCents: calculateSupplierLiquidationTotalCents(
+      row.saleTotalCents,
+      financialsMap.get(row.saleItemId)?.productGainCents ?? 0,
+      financialsMap.get(row.saleItemId)?.totalGainCents ?? 0
+    ),
+    gainCents: gainBySaleItemId.get(row.saleItemId) ?? 0
+  }));
+}
+
+function buildPaymentSummaryMap(database: SqliteDatabaseLike, saleIds: number[]): Map<number, string> {
+  if (saleIds.length === 0) {
+    return new Map();
+  }
+
   const rows = database.client
     .prepare(
       `
         SELECT
-          sale_item_id AS saleItemId,
-          SUM(consumed_quantity * historical_supplier_unit_cost_cents) AS amountCents
-        FROM sale_item_allocations
-        WHERE sale_item_id IN (${createPlaceholders(saleItemIds.length)})
-        GROUP BY sale_item_id
+          sale_id AS saleId,
+          payment_method AS paymentMethod,
+          amount_cents AS amountCents
+        FROM payments
+        WHERE sale_id IN (${createPlaceholders(saleIds.length)})
+          AND cancelled_at IS NULL
+        ORDER BY created_at ASC, id ASC
       `
     )
-    .all(...saleItemIds) as HistoricalAmountRow[];
+    .all(...saleIds) as Array<{ saleId: number; paymentMethod: string | null; amountCents: number }>;
 
-  return new Map(rows.map((row) => [row.saleItemId, { amountCents: row.amountCents }]));
+  const grouped = new Map<number, Array<{ paymentMethod: string | null; amountCents: number }>>();
+
+  rows.forEach((row) => {
+    const current = grouped.get(row.saleId) ?? [];
+    current.push({ paymentMethod: row.paymentMethod, amountCents: row.amountCents });
+    grouped.set(row.saleId, current);
+  });
+
+  const labels = new Map<number, string>();
+
+  grouped.forEach((payments, saleId) => {
+    labels.set(
+      saleId,
+      payments
+        .map((payment) => `${formatPaymentMethodLabel(payment.paymentMethod)}: ${formatCurrencyCents(payment.amountCents)}`)
+        .join(' / ')
+    );
+  });
+
+  return labels;
 }
 
-function getBatchSaleItemIds(database: SqliteDatabaseLike, batchId: number): number[] {
-  return (database.client
-    .prepare(
-      `
-        SELECT sale_item_id AS saleItemId
-        FROM consignment_batch_items
-        WHERE batch_id = ?
-        ORDER BY id ASC
-      `
-    )
-    .all(batchId) as BatchSaleItemRow[]).map((row) => row.saleItemId);
+function formatPaymentMethodLabel(value: string | null): string {
+  switch (value) {
+    case 'cash':
+      return 'Efectivo';
+    case 'bank_transfer':
+      return 'Transferencia';
+    default:
+      return 'Sin método';
+  }
+}
+
+function formatCurrencyCents(amountCents: number): string {
+  return new Intl.NumberFormat('es-AR', {
+    style: 'currency',
+    currency: 'ARS',
+    minimumFractionDigits: 2
+  }).format(amountCents / 100);
 }
 
 function nextBatchNumber(database: SqliteDatabaseLike): number {

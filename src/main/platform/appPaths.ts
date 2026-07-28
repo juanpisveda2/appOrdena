@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 
-export const DATABASE_FILE_NAME = 'project-mama.sqlite';
+export const DATABASE_FILE_NAME = 'ordena.sqlite';
 
 export interface AppPathProvider {
   getPath(name: 'userData'): string;

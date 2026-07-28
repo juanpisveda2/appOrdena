@@ -16,16 +16,18 @@ describe('catalog pricing helpers', () => {
   it('defaults personalization profit to five percent and keeps it separate', () => {
     expect(
       calculatePricingSummary({
-        supplierUnitCostCents: 100_000,
+        cashPriceCents: 110_000,
+        listPriceCents: 120_000,
         profitPercentageBasisPoints: 1_000,
         personalizationAmountCents: 5_000
       })
     ).toEqual({
-      expectedProfitCents: 10_000,
-      suggestedPriceCents: 110_000,
+      cashExpectedProfitCents: 11_000,
+      listExpectedProfitCents: 12_000,
       personalizationPercentageBasisPoints: DEFAULT_PERSONALIZATION_BASIS_POINTS,
       personalizationExpectedProfitCents: 250,
-      totalExpectedProfitCents: 10_250
+      cashTotalExpectedProfitCents: 11_250,
+      listTotalExpectedProfitCents: 12_250
     });
   });
 

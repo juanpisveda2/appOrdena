@@ -255,7 +255,8 @@ describe('saveStockIntake', () => {
       cashPriceCents: 125_000,
       listPriceCents: 130_000,
       profitPercentageBasisPoints: 1_000,
-      expectedProfitCents: 10_000,
+      expectedProfitCents: 12_500,
+      expectedListProfitCents: 13_000,
       personalizationAmountCents: null,
       personalizationPercentageBasisPoints: null,
       personalizationExpectedProfitCents: null,
@@ -348,9 +349,11 @@ describe('saveStockIntake', () => {
       currentCashPriceCents: 95_000,
       currentListPriceCents: 105_000,
       currentProfitPercentageBasisPoints: 1_500,
-      currentExpectedProfitCents: 12_000,
+      currentCashExpectedProfitCents: 14_250,
+      currentListExpectedProfitCents: 15_750,
       currentPersonalizationExpectedProfitCents: null,
-      currentTotalExpectedProfitCents: 12_000,
+      currentCashTotalExpectedProfitCents: 14_250,
+      currentListTotalExpectedProfitCents: 15_750,
       recentIntakes: [
         {
           stockIntakeId: 1,
@@ -360,11 +363,13 @@ describe('saveStockIntake', () => {
           cashPriceCents: 95_000,
           listPriceCents: 105_000,
           profitPercentageBasisPoints: 1_500,
-          expectedProfitCents: 12_000,
+          cashExpectedProfitCents: 14_250,
+          listExpectedProfitCents: 15_750,
           personalizationAmountCents: null,
           personalizationPercentageBasisPoints: null,
           personalizationExpectedProfitCents: null,
-          totalExpectedProfitCents: 12_000,
+          cashTotalExpectedProfitCents: 14_250,
+          listTotalExpectedProfitCents: 15_750,
           intakeDate: '2026-07-14',
           notes: 'Front engraving included.'
         }
@@ -415,13 +420,15 @@ describe('saveStockIntake', () => {
     expect(getCatalogProductDetail(initialized.database, 1)).toEqual(
       expect.objectContaining({
         currentPersonalizationExpectedProfitCents: 600,
-        currentTotalExpectedProfitCents: 12_600,
+        currentCashTotalExpectedProfitCents: 14_850,
+        currentListTotalExpectedProfitCents: 16_350,
         recentIntakes: [
           expect.objectContaining({
             personalizationAmountCents: 8_000,
             personalizationPercentageBasisPoints: 750,
             personalizationExpectedProfitCents: 600,
-            totalExpectedProfitCents: 12_600
+            cashTotalExpectedProfitCents: 14_850,
+            listTotalExpectedProfitCents: 16_350
           })
         ]
       })
@@ -489,13 +496,13 @@ describe('saveStockIntake', () => {
     expect(listCatalogProducts(initialized.database, { category: 'all' }).products).toEqual([]);
     expect(searchReusableProducts(initialized.database, 'aros borrables')).toEqual([]);
     expect(listSalesHistory(initialized.database, { limit: 10 })[0]).toEqual(
-      expect.objectContaining({ saleId: sale.saleId, totalProfitCents: 10_000 })
+      expect.objectContaining({ saleId: sale.saleId, totalProfitCents: 12_000 })
     );
     expect(getSaleDetail(initialized.database, { saleId: sale.saleId })).toEqual(
-      expect.objectContaining({ saleId: sale.saleId, totalProfitCents: 10_000 })
+      expect.objectContaining({ saleId: sale.saleId, totalProfitCents: 12_000 })
     );
     expect(listPendingConsignmentItems(initialized.database)).toEqual([
-      expect.objectContaining({ saleItemId: sale.items[0]?.saleItemId, productName: 'Aros borrables', gainCents: 10_000 })
+      expect.objectContaining({ saleItemId: sale.items[0]?.saleItemId, productName: 'Aros borrables', gainCents: 12_000 })
     ]);
 
     initialized.database.close();

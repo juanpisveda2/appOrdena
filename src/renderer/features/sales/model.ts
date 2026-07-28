@@ -28,12 +28,11 @@ export interface SalesDraftItem {
   availableQuantity: number;
   baseCashPriceCents?: number;
   baseListPriceCents?: number;
-  productExpectedProfitCents?: number | null;
   cashPriceCents?: number;
   listPriceCents?: number;
-  expectedProfitCents?: number | null;
+  cashExpectedProfitCents?: number | null;
+  listExpectedProfitCents?: number | null;
   personalizationExpectedProfitCents?: number | null;
-  totalExpectedProfitCents?: number | null;
   quantity: number;
   priceType: SalePriceType;
   hasPersonalization?: boolean;
@@ -59,6 +58,7 @@ export interface SalesState {
   historyStatus: 'idle' | 'loading' | 'ready' | 'error';
   historyError: string | null;
   historyResults: SalesHistoryListItem[];
+  historyPage: number;
   draftItems: SalesDraftItem[];
   customer: {
     name: string;
@@ -194,28 +194,26 @@ export function getDraftItemGainPreview(item: SalesDraftItem): SalesDraftGainPre
   const personalizationPercentageBasisPoints = item.hasPersonalization
     ? parseOptionalPercentageAmount(item.personalizationPercentage ?? '') ?? DEFAULT_PERSONALIZATION_BASIS_POINTS
     : null;
-  const legacyProductGainCents = item.expectedProfitCents == null ? null : item.expectedProfitCents * item.quantity;
-  const legacyPersonalizationGainCents = item.personalizationExpectedProfitCents == null
-    ? null
-    : item.personalizationExpectedProfitCents * item.quantity;
-  const productGainCents = item.productExpectedProfitCents == null
-    ? legacyProductGainCents
-    : item.productExpectedProfitCents * item.quantity;
+  const selectedExpectedProfitCents = item.priceType === 'cash'
+    ? (item.cashExpectedProfitCents ?? null)
+    : (item.listExpectedProfitCents ?? null);
+  const productGainCents = selectedExpectedProfitCents == null ? null : selectedExpectedProfitCents * item.quantity;
   const personalizationGainCents = personalizationAmountCents == null || personalizationPercentageBasisPoints == null
-    ? legacyPersonalizationGainCents
+    ? (item.personalizationExpectedProfitCents == null ? null : item.personalizationExpectedProfitCents * item.quantity)
     : calculateExpectedProfitCents(personalizationAmountCents, personalizationPercentageBasisPoints) * item.quantity;
 
   return {
     productGainCents,
     personalizationGainCents,
     totalExpectedProfitCents:
-      item.totalExpectedProfitCents != null && !item.hasPersonalization
-        ? item.totalExpectedProfitCents * item.quantity
-        : productGainCents == null && personalizationGainCents == null
+      productGainCents == null && personalizationGainCents == null
         ? null
         : (productGainCents ?? 0) + (personalizationGainCents ?? 0)
   };
 }
+
+export const SALES_HISTORY_PAGE_SIZE = 6;
+const SALES_HISTORY_FETCH_LIMIT = 60;
 
 export function shouldShowPendingBalance(balanceCents: number): boolean {
   return balanceCents > 0;
@@ -424,6 +422,7 @@ export function createInitialSalesState(): SalesState {
     historyStatus: 'idle',
     historyError: null,
     historyResults: [],
+    historyPage: 1,
     draftItems: [],
     customer: {
       name: '',
@@ -452,6 +451,26 @@ export function createInitialSalesState(): SalesState {
   };
 }
 
+export function getSalesHistoryPageCount(historyResults: SalesHistoryListItem[], pageSize = SALES_HISTORY_PAGE_SIZE): number {
+  return Math.max(1, Math.ceil(historyResults.length / pageSize));
+}
+
+export function getSalesHistoryPage(
+  historyResults: SalesHistoryListItem[],
+  historyPage: number,
+  pageSize = SALES_HISTORY_PAGE_SIZE
+): SalesHistoryListItem[] {
+  const totalPages = getSalesHistoryPageCount(historyResults, pageSize);
+  const currentPage = Math.min(Math.max(historyPage, 1), totalPages);
+  const startIndex = (currentPage - 1) * pageSize;
+
+  return historyResults.slice(startIndex, startIndex + pageSize);
+}
+
+export function getAvailableSalesSearchResults(searchResults: CatalogSearchResult[]): CatalogSearchResult[] {
+  return searchResults.filter((product) => !product.isOutOfStock && product.availableQuantity > 0);
+}
+
 function mergeDraftItem(current: SalesDraftItem[], detail: CatalogProductDetail): SalesDraftItem[] {
   const existing = current.find((item) => item.reusableProductId === detail.reusableProductId);
 
@@ -465,7 +484,9 @@ function mergeDraftItem(current: SalesDraftItem[], detail: CatalogProductDetail)
       availableQuantity: detail.availableQuantity,
       baseCashPriceCents: detail.currentCashPriceCents ?? 0,
       baseListPriceCents: detail.currentListPriceCents ?? detail.currentCashPriceCents ?? 0,
-      productExpectedProfitCents: detail.currentExpectedProfitCents,
+      cashExpectedProfitCents: detail.currentCashExpectedProfitCents,
+      listExpectedProfitCents: detail.currentListExpectedProfitCents,
+      personalizationExpectedProfitCents: detail.currentPersonalizationExpectedProfitCents,
       quantity: 1,
       priceType: 'cash',
       hasPersonalization: false,
@@ -482,7 +503,9 @@ function mergeDraftItem(current: SalesDraftItem[], detail: CatalogProductDetail)
           category: detail.category,
           baseCashPriceCents: detail.currentCashPriceCents ?? item.baseCashPriceCents,
           baseListPriceCents: detail.currentListPriceCents ?? item.baseListPriceCents,
-          productExpectedProfitCents: detail.currentExpectedProfitCents,
+          cashExpectedProfitCents: detail.currentCashExpectedProfitCents,
+          listExpectedProfitCents: detail.currentListExpectedProfitCents,
+          personalizationExpectedProfitCents: detail.currentPersonalizationExpectedProfitCents,
           quantity: Math.min(item.quantity + 1, Math.max(detail.availableQuantity, 1))
         }
       : item
@@ -521,27 +544,30 @@ export function createSalesActions({ bridge, getState, setState }: SalesActionDe
   const loadHistory = async (): Promise<void> => {
     const query = getState().historyQuery.trim();
 
-    setState((current) => ({
-      ...current,
-      historyStatus: 'loading',
-      historyError: null
-    }));
+      setState((current) => ({
+        ...current,
+        historyStatus: 'loading',
+        historyError: null,
+        historyPage: 1
+      }));
 
     try {
-      const historyResults = await bridge.sales.listHistory({ query, limit: 20 });
+        const historyResults = await bridge.sales.listHistory({ query, limit: SALES_HISTORY_FETCH_LIMIT });
 
       setState((current) => ({
         ...current,
         historyStatus: 'ready',
         historyError: null,
-        historyResults
+        historyResults,
+        historyPage: 1
       }));
     } catch {
       setState((current) => ({
         ...current,
         historyStatus: 'error',
         historyError: 'No pudimos cargar las ventas en este momento.',
-        historyResults: []
+        historyResults: [],
+        historyPage: 1
       }));
     }
   };
@@ -558,7 +584,14 @@ export function createSalesActions({ bridge, getState, setState }: SalesActionDe
       setState((current) => ({
         ...current,
         historyQuery,
-        historyError: null
+        historyError: null,
+        historyPage: 1
+      }));
+    },
+    setHistoryPage(historyPage: number): void {
+      setState((current) => ({
+        ...current,
+        historyPage: Math.max(1, historyPage)
       }));
     },
     async loadSalesHistory(): Promise<void> {
@@ -639,7 +672,7 @@ export function createSalesActions({ bridge, getState, setState }: SalesActionDe
       }));
 
       try {
-        const searchResults = await bridge.catalog.search({ query, limit: 12 });
+        const searchResults = getAvailableSalesSearchResults(await bridge.catalog.search({ query, limit: 12 }));
 
         setState((current) => {
           if (current.searchQuery.trim() !== query) {
@@ -671,6 +704,16 @@ export function createSalesActions({ bridge, getState, setState }: SalesActionDe
     async addProduct(reusableProductId: number): Promise<void> {
       try {
         const detail = await bridge.catalog.getProductDetail({ reusableProductId, recentIntakesLimit: 1 });
+
+        if (detail.availableQuantity <= 0) {
+          setState((current) => ({
+            ...current,
+            submitStatus: 'error',
+            submitMessage: 'Este producto ya no tiene stock disponible para vender.'
+          }));
+
+          return;
+        }
 
         setState((current) => ({
           ...current,

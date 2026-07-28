@@ -113,9 +113,11 @@ describe('preload app bridge', () => {
       currentCashPriceCents: 120000,
       currentListPriceCents: 125000,
       currentProfitPercentageBasisPoints: 1000,
-      currentExpectedProfitCents: 10000,
+      currentCashExpectedProfitCents: 12000,
+      currentListExpectedProfitCents: 12500,
       currentPersonalizationExpectedProfitCents: null,
-      currentTotalExpectedProfitCents: 10000,
+      currentCashTotalExpectedProfitCents: 12000,
+      currentListTotalExpectedProfitCents: 12500,
       recentIntakes: []
     };
     const saveResponse: SaveStockIntakeResult = {
@@ -176,6 +178,7 @@ describe('preload app bridge', () => {
       itemCount: 1,
       totalCents: 90000,
       totalGainCents: 30000,
+      remainingCents: 0,
       notes: null,
       createdAt: '2026-07-20T10:00:00.000Z'
     };
@@ -187,6 +190,7 @@ describe('preload app bridge', () => {
         itemCount: 1,
         totalCents: 90000,
         totalGainCents: 30000,
+        remainingCents: 0,
         notes: null,
         createdAt: '2026-07-20T10:00:00.000Z'
       }
@@ -198,6 +202,7 @@ describe('preload app bridge', () => {
       itemCount: 1,
       totalCents: 90000,
       totalGainCents: 30000,
+      remainingCents: 0,
       notes: null,
       createdAt: '2026-07-20T10:00:00.000Z',
       items: [
@@ -213,6 +218,13 @@ describe('preload app bridge', () => {
           personalizationCents: null,
           saleTotalCents: 120000,
           amountCents: 90000,
+          saleStatus: 'paid',
+          salePaidCents: 120000,
+          saleBalanceCents: 0,
+          paymentMethodSummary: 'Efectivo: $ 1.200,00',
+          liquidatedPreviouslyCents: 0,
+          totalAccumulatedCents: 90000,
+          remainingBalanceCents: 0,
           productGainCents: 30000,
           personalizationGainCents: 0,
           gainCents: 30000,

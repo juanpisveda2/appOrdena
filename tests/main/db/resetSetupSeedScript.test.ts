@@ -14,14 +14,18 @@ import { historicalSnapshotsResetMigration } from '../../../src/main/db/migratio
 import { initialSchemaMigration } from '../../../src/main/db/migrations/v001_initialSchema';
 import { salesCoreMigration } from '../../../src/main/db/migrations/v003_salesCore';
 import { saleItemPersonalizationSnapshotsMigration } from '../../../src/main/db/migrations/v008_saleItemPersonalizationSnapshots';
+import { partialConsignmentLiquidationsMigration } from '../../../src/main/db/migrations/v009_partialConsignmentLiquidations';
+import { profitRuleByPriceBaseMigration } from '../../../src/main/db/migrations/v010_profitRuleByPriceBase';
+import { consignmentLiquidationSnapshotsMigration } from '../../../src/main/db/migrations/v011_consignmentLiquidationSnapshots';
+import { appBrandingMetadataMigration } from '../../../src/main/db/migrations/v012_appBrandingMetadata';
 import { runMigrations } from '../../../src/main/db/migrate';
 
 const projectRootPath = fileURLToPath(new URL('../../../', import.meta.url));
 
 describe('reset-setup-seed script', () => {
-  it('recreates the database file with the v8 schema and wipes pre-existing data through the explicit reset flow', () => {
+  it('recreates the database file with the current schema and wipes pre-existing data through the explicit reset flow', () => {
     const directory = mkdtempSync(join(tmpdir(), 'project-mama-reset-script-'));
-    const databaseFilePath = join(directory, 'project-mama.sqlite');
+    const databaseFilePath = join(directory, 'ordena.sqlite');
 
     try {
       const existingDatabase = openSqliteDatabase({ databaseFilePath });
@@ -35,7 +39,11 @@ describe('reset-setup-seed script', () => {
           catalogSoftDeleteMigration,
           consignmentBatchGainMigration,
           historicalSnapshotsResetMigration,
-          saleItemPersonalizationSnapshotsMigration
+          saleItemPersonalizationSnapshotsMigration,
+          partialConsignmentLiquidationsMigration,
+          profitRuleByPriceBaseMigration,
+          consignmentLiquidationSnapshotsMigration,
+          appBrandingMetadataMigration
         ]);
 
         const saved = saveStockIntake(existingDatabase, {
@@ -90,7 +98,7 @@ describe('reset-setup-seed script', () => {
         const customerCount = database.client.prepare('SELECT COUNT(*) AS count FROM customers').get() as { count: number };
         const productCount = database.client.prepare('SELECT COUNT(*) AS count FROM reusable_products').get() as { count: number };
 
-        expect(versionRow?.user_version).toBe(8);
+        expect(versionRow?.user_version).toBe(12);
         expect(marginRuleCount.count).toBe(4);
         expect(customerCount.count).toBe(0);
         expect(productCount.count).toBe(0);
@@ -110,6 +118,21 @@ describe('reset-setup-seed script', () => {
             'product_gain_cents',
             'personalization_gain_cents',
             'total_gain_cents'
+          ])
+        );
+        const consignmentBatchColumns = database.client
+          .prepare("PRAGMA table_info('consignment_batch_items')")
+          .all() as Array<{ name: string }>;
+        expect(consignmentBatchColumns.map((column) => column.name)).toEqual(
+          expect.arrayContaining([
+            'product_gain_cents',
+            'personalization_gain_cents',
+            'gain_cents',
+            'snapshot_sale_status',
+            'snapshot_sale_paid_cents',
+            'snapshot_sale_balance_cents',
+            'snapshot_buyer_name',
+            'snapshot_payment_method_summary'
           ])
         );
       } finally {

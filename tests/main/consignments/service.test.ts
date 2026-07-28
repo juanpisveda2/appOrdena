@@ -11,7 +11,8 @@ import {
   assignSaleCustomerForPaymentRecovery,
   cancelSale,
   confirmSaleDraft,
-  getSaleDetail
+  getSaleDetail,
+  registerSalePayment
 } from '../../../src/main/services/sales/service';
 import { registerSqliteTestHarness } from '../../support/sqliteTestHarness';
 
@@ -90,6 +91,7 @@ function seedSoldItem(
     profitPercentageBasisPoints?: number;
     personalizationAmountCents?: number;
     personalizationPercentageBasisPoints?: number;
+    initialPaymentAmountCents?: number;
     secondIntake?: {
       enteredQuantity: number;
       availableQuantity: number;
@@ -151,7 +153,9 @@ function seedSoldItem(
         }
       ],
     initialPayment: {
-        amountCents: ((options.secondIntake?.cashPriceCents ?? (options.secondIntake ? 125_000 : (options.cashPriceCents ?? 120_000))) + personalizationAmountCents) * quantity,
+        amountCents:
+          options.initialPaymentAmountCents ??
+          ((options.secondIntake?.cashPriceCents ?? (options.secondIntake ? 125_000 : (options.cashPriceCents ?? 120_000))) + personalizationAmountCents) * quantity,
         paymentMethod: 'cash'
       },
     saleDate: options.saleDate ?? '2026-07-16T10:00:00.000Z'
@@ -231,33 +235,94 @@ describe('consignments service', () => {
     initialized.database.close();
   });
 
-  it('rejects already associated items even if status drift exists', () => {
+  it('allows repeated partial liquidations without duplicating amounts or gain', () => {
     const initialized = createInitializedAppForTest();
-    const sold = seedSoldItem(initialized, { name: 'Aros asociados' });
+    const sold = seedSoldItem(initialized, {
+      name: 'Aros parciales',
+      buyerName: 'Ana',
+      saleDate: '2026-07-16T10:00:00.000Z',
+      supplierUnitCostCents: 90_000,
+      cashPriceCents: 120_000,
+      profitPercentageBasisPoints: 1_000,
+      initialPaymentAmountCents: 20_000
+    });
+    const saleDetail = getSaleDetail(initialized.database, { saleId: sold.sale.saleId });
+    const firstBatchGainCents = Math.trunc((saleDetail.totalProfitCents * 20_000) / 108_000);
+    const secondBatchGainCents = Math.trunc((saleDetail.totalProfitCents * 60_000) / 108_000) - firstBatchGainCents;
+    const finalBatchGainCents = saleDetail.totalProfitCents - firstBatchGainCents - secondBatchGainCents;
 
-    initialized.database.client
-      .prepare(
-        `
-          INSERT INTO consignment_batches (batch_number, liquidation_date, total_cents, total_gain_cents, notes, created_at)
-          VALUES (1, '2026-07-16', 90000, 30000, NULL, '2026-07-16T11:00:00.000Z')
-        `
-      )
-      .run();
-    initialized.database.client
-      .prepare(
-        `
-          INSERT INTO consignment_batch_items (batch_id, sale_item_id, amount_cents, created_at)
-          VALUES (1, ?, 90000, '2026-07-16T11:00:00.000Z')
-        `
-      )
-      .run(sold.saleItemId);
-
-    expect(() =>
-      confirmConsignmentBatch(initialized.database, {
-        saleItemIds: [sold.saleItemId],
-        liquidationDate: '2026-07-16'
+    expect(listPendingConsignmentItems(initialized.database)).toEqual([
+      expect.objectContaining({
+        saleItemId: sold.saleItemId,
+        saleStatus: 'partial_payment',
+        amountCents: 108_000,
+        liquidatedPreviouslyCents: 0,
+        salePaidCents: 20_000,
+        saleBalanceCents: 100_000,
+        gainCents: firstBatchGainCents
       })
-    ).toThrow(/already associated/i);
+    ]);
+
+    const firstBatch = confirmConsignmentBatch(initialized.database, {
+      saleItemIds: [sold.saleItemId],
+      liquidationDate: '2026-07-16'
+    });
+
+    expect(firstBatch).toEqual(expect.objectContaining({ totalCents: 20_000, remainingCents: 88_000, totalGainCents: firstBatchGainCents }));
+
+    const firstDetail = getConsignmentBatchDetail(initialized.database, { batchId: firstBatch.batchId });
+    expect(firstDetail.items[0]).toEqual(
+      expect.objectContaining({
+        amountCents: 20_000,
+        liquidatedPreviouslyCents: 0,
+        totalAccumulatedCents: 20_000,
+        remainingBalanceCents: 88_000,
+        gainCents: firstBatchGainCents
+      })
+    );
+
+    expect(listPendingConsignmentItems(initialized.database)).toEqual([
+      expect.objectContaining({
+        saleItemId: sold.saleItemId,
+        amountCents: 88_000,
+        liquidatedPreviouslyCents: 20_000,
+        salePaidCents: 20_000,
+        saleBalanceCents: 100_000,
+        gainCents: 0
+      })
+    ]);
+
+    registerSalePayment(initialized.database, {
+      saleId: sold.sale.saleId,
+      amountCents: 40_000,
+      paymentMethod: 'cash'
+    });
+
+    const secondBatch = confirmConsignmentBatch(initialized.database, {
+      saleItemIds: [sold.saleItemId],
+      liquidationDate: '2026-07-17'
+    });
+
+    expect(secondBatch).toEqual(expect.objectContaining({ totalCents: 40_000, remainingCents: 48_000, totalGainCents: secondBatchGainCents }));
+
+    registerSalePayment(initialized.database, {
+      saleId: sold.sale.saleId,
+      amountCents: 60_000,
+      paymentMethod: 'cash'
+    });
+
+    const finalBatch = confirmConsignmentBatch(initialized.database, {
+      saleItemIds: [sold.saleItemId],
+      liquidationDate: '2026-07-18'
+    });
+
+    expect(finalBatch).toEqual(expect.objectContaining({ totalCents: 48_000, remainingCents: 0, totalGainCents: finalBatchGainCents }));
+    expect(listPendingConsignmentItems(initialized.database)).toEqual([]);
+
+    const persisted = initialized.database.client
+      .prepare('SELECT SUM(amount_cents) AS totalCents FROM consignment_batch_items WHERE sale_item_id = ?')
+      .get(sold.saleItemId) as { totalCents: number };
+    expect(persisted.totalCents).toBe(108_000);
 
     initialized.database.close();
   });
@@ -284,7 +349,7 @@ describe('consignments service', () => {
     initialized.database.close();
   });
 
-  it('calculates settlement totals from historical allocation cost instead of current pricing', () => {
+  it('calculates settlement totals from sold amount minus historical gain instead of current pricing', () => {
     const initialized = createInitializedAppForTest();
     const sold = seedSoldItem(initialized, {
       name: 'Aros históricos',
@@ -307,12 +372,12 @@ describe('consignments service', () => {
       liquidationDate: '2026-07-16'
     });
 
-    expect(result.totalCents).toBe(185_000);
+    expect(result.totalCents).toBe(225_500);
 
     initialized.database.close();
   });
 
-  it('uses the same profit calculation as sales for pending, confirmed, history, and detail views', () => {
+  it('keeps full liquidation gain aligned with the historical sale profit when the item is settled in one batch', () => {
     const initialized = createInitializedAppForTest();
     const sold = seedSoldItem(initialized, {
       name: 'Aros ganancia compartida',
@@ -371,7 +436,9 @@ describe('consignments service', () => {
       )
       .run();
 
-    const saleDetail = getSaleDetail(initialized.database, { saleId: withPersonalization.sale.saleId });
+    const productOnlyDetail = getSaleDetail(initialized.database, { saleId: productOnly.sale.saleId });
+    const withPersonalizationDetail = getSaleDetail(initialized.database, { saleId: withPersonalization.sale.saleId });
+    const thirdDetail = getSaleDetail(initialized.database, { saleId: third.sale.saleId });
     const pending = listPendingConsignmentItems(initialized.database);
     const pendingGainById = new Map(pending.map((item) => [item.saleItemId, item.gainCents]));
     const selectedGain =
@@ -379,11 +446,14 @@ describe('consignments service', () => {
       (pendingGainById.get(withPersonalization.saleItemId) ?? 0) +
       (pendingGainById.get(third.saleItemId) ?? 0);
 
-    expect(saleDetail.totalProfitCents).toBe(27_500);
-    expect(pendingGainById.get(productOnly.saleItemId)).toBe(30_000);
-    expect(pendingGainById.get(withPersonalization.saleItemId)).toBe(27_500);
-    expect(pendingGainById.get(third.saleItemId)).toBe(7_500);
-    expect(selectedGain).toBe(65_000);
+    expect(pendingGainById.get(productOnly.saleItemId)).toBe(productOnlyDetail.totalProfitCents);
+    expect(pendingGainById.get(withPersonalization.saleItemId)).toBe(withPersonalizationDetail.totalProfitCents);
+    expect(pendingGainById.get(third.saleItemId)).toBe(thirdDetail.totalProfitCents);
+    expect(selectedGain).toBe(
+      productOnlyDetail.totalProfitCents +
+      withPersonalizationDetail.totalProfitCents +
+      thirdDetail.totalProfitCents
+    );
 
     const batch = confirmConsignmentBatch(initialized.database, {
       saleItemIds: [productOnly.saleItemId, withPersonalization.saleItemId, third.saleItemId],
@@ -392,19 +462,21 @@ describe('consignments service', () => {
     const history = listConsignmentBatchHistory(initialized.database)[0];
     const detail = getConsignmentBatchDetail(initialized.database, { batchId: batch.batchId });
 
-    expect(batch.totalGainCents).toBe(65_000);
-    expect(history?.totalGainCents).toBe(65_000);
-    expect(detail.totalGainCents).toBe(65_000);
-    expect(detail.items.map((item) => item.gainCents).sort((left, right) => left - right)).toEqual([
-      7_500,
-      27_500,
-      30_000
-    ]);
+    expect(batch.totalGainCents).toBe(selectedGain);
+    expect(history?.totalGainCents).toBe(selectedGain);
+    expect(detail.totalGainCents).toBe(selectedGain);
+    expect(detail.items.map((item) => item.gainCents).sort((left, right) => left - right)).toEqual(
+      [
+        productOnlyDetail.totalProfitCents,
+        withPersonalizationDetail.totalProfitCents,
+        thirdDetail.totalProfitCents
+      ].sort((left, right) => left - right)
+    );
 
     const persistedBatch = initialized.database.client
       .prepare('SELECT total_gain_cents AS totalGainCents FROM consignment_batches WHERE id = ?')
       .get(batch.batchId) as { totalGainCents: number };
-    expect(persistedBatch.totalGainCents).toBe(65_000);
+    expect(persistedBatch.totalGainCents).toBe(selectedGain);
 
     initialized.database.close();
   });
@@ -451,18 +523,62 @@ describe('consignments service', () => {
     const history = listConsignmentBatchHistory(initialized.database)[0];
     const detail = getConsignmentBatchDetail(initialized.database, { batchId: batch.batchId });
 
-    expect(saleDetail.totalProfitCents).toBe(61_000);
-    expect(pending[0]?.gainCents).toBe(61_000);
-    expect(batch.totalGainCents).toBe(61_000);
-    expect(history?.totalGainCents).toBe(61_000);
-    expect(detail.totalGainCents).toBe(61_000);
+    expect(pending[0]?.gainCents).toBe(saleDetail.totalProfitCents);
+    expect(batch.totalGainCents).toBe(saleDetail.totalProfitCents);
+    expect(history?.totalGainCents).toBe(saleDetail.totalProfitCents);
+    expect(detail.totalGainCents).toBe(saleDetail.totalProfitCents);
     expect(detail.items[0]).toEqual(
       expect.objectContaining({
-        productGainCents: 60_000,
-        personalizationGainCents: 1_000,
-        gainCents: 61_000
+        gainCents: saleDetail.totalProfitCents
       })
     );
+    expect((detail.items[0]?.productGainCents ?? 0) + (detail.items[0]?.personalizationGainCents ?? 0)).toBe(
+      detail.items[0]?.gainCents
+    );
+
+    initialized.database.close();
+  });
+
+  it('liquidates mixed full and partial sales without exceeding the buyer-collected amount on the partial one', () => {
+    const initialized = createInitializedAppForTest();
+    const fullSale = seedSoldItem(initialized, {
+      name: 'Aros pagados completos',
+      buyerName: 'Ana',
+      supplierUnitCostCents: 90_000,
+      cashPriceCents: 120_000,
+      profitPercentageBasisPoints: 1_000
+    });
+    const partialSale = seedSoldItem(initialized, {
+      name: 'Pulsera parcial',
+      buyerName: 'Elena',
+      supplierUnitCostCents: 90_000,
+      cashPriceCents: 120_000,
+      profitPercentageBasisPoints: 1_000,
+      initialPaymentAmountCents: 20_000
+    });
+
+    const pendingBefore = listPendingConsignmentItems(initialized.database);
+    const result = confirmConsignmentBatch(initialized.database, {
+      saleItemIds: [fullSale.saleItemId, partialSale.saleItemId],
+      liquidationDate: '2026-07-18'
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      totalCents: 128_000,
+      totalGainCents: pendingBefore.reduce((sum, item) => sum + item.gainCents, 0),
+      remainingCents: 88_000
+    }));
+
+    const detail = getConsignmentBatchDetail(initialized.database, { batchId: result.batchId });
+    expect(detail.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ productName: 'Aros pagados completos', amountCents: 108_000, remainingBalanceCents: 0 }),
+        expect.objectContaining({ productName: 'Pulsera parcial', amountCents: 20_000, remainingBalanceCents: 88_000 })
+      ])
+    );
+    expect(listPendingConsignmentItems(initialized.database)).toEqual([
+      expect.objectContaining({ productName: 'Pulsera parcial', amountCents: 88_000, liquidatedPreviouslyCents: 20_000 })
+    ]);
 
     initialized.database.close();
   });
@@ -552,6 +668,8 @@ describe('consignments service', () => {
       supplierUnitCostCents: 80_000
     });
 
+    const pending = listPendingConsignmentItems(initialized.database);
+    const expectedGainByProductName = new Map(pending.map((item) => [item.productName, item.gainCents]));
     const batch = confirmConsignmentBatch(initialized.database, {
       saleItemIds: [first.saleItemId, second.saleItemId],
       liquidationDate: '2026-07-19'
@@ -559,8 +677,14 @@ describe('consignments service', () => {
     const detail = getConsignmentBatchDetail(initialized.database, { batchId: batch.batchId });
 
     expect(detail.items).toEqual([
-      expect.objectContaining({ productName: 'Pulsera orden cruzado', gainCents: 8_000 }),
-      expect.objectContaining({ productName: 'Aros orden cruzado', gainCents: 9_000 })
+      expect.objectContaining({
+        productName: 'Pulsera orden cruzado',
+        gainCents: expectedGainByProductName.get('Pulsera orden cruzado')
+      }),
+      expect.objectContaining({
+        productName: 'Aros orden cruzado',
+        gainCents: expectedGainByProductName.get('Aros orden cruzado')
+      })
     ]);
 
     initialized.database.close();
@@ -610,7 +734,7 @@ describe('consignments service', () => {
     initialized.database.close();
   });
 
-  it('shows a later-assigned walk-in customer in liquidation history detail surfaces', () => {
+  it('shows a later-assigned walk-in customer in liquidation history detail surfaces when the assignment happens before confirmation', () => {
     const initialized = createInitializedAppForTest();
     const sold = seedSoldItem(initialized, {
       name: 'Aros walk-in recuperado'
@@ -634,6 +758,44 @@ describe('consignments service', () => {
       expect.objectContaining({
         productName: 'Aros walk-in recuperado',
         buyerName: 'Elena'
+      })
+    );
+
+    initialized.database.close();
+  });
+
+  it('freezes liquidation detail snapshots after confirmation even if the sale changes later', () => {
+    const initialized = createInitializedAppForTest();
+    const sold = seedSoldItem(initialized, {
+      name: 'Aros snapshot congelado',
+      buyerName: 'Ana',
+      initialPaymentAmountCents: 20_000
+    });
+
+    const batch = confirmConsignmentBatch(initialized.database, {
+      saleItemIds: [sold.saleItemId],
+      liquidationDate: '2026-07-18'
+    });
+
+    initialized.database.client
+      .prepare("UPDATE sales SET customer_name_snapshot = 'Elena' WHERE id = ?")
+      .run(sold.sale.saleId);
+    registerSalePayment(initialized.database, {
+      saleId: sold.sale.saleId,
+      amountCents: 40_000,
+      paymentMethod: 'bank_transfer'
+    });
+
+    const detail = getConsignmentBatchDetail(initialized.database, { batchId: batch.batchId });
+
+    expect(detail).toEqual(expect.objectContaining({ remainingCents: 88_000, totalGainCents: batch.totalGainCents }));
+    expect(detail.items[0]).toEqual(
+      expect.objectContaining({
+        buyerName: 'Ana',
+        saleStatus: 'partial_payment',
+        salePaidCents: 20_000,
+        saleBalanceCents: 100_000,
+        paymentMethodSummary: expect.stringContaining('200,00')
       })
     );
 

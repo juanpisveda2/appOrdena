@@ -34,10 +34,10 @@ export function mapConsignmentError(error: unknown): Error {
         return new Error('No podés liquidar artículos de una venta cancelada.');
       case 'SALE_ITEM_NOT_PENDING_SETTLEMENT':
         return new Error('La selección incluye artículos que ya no están pendientes de liquidación.');
-      case 'SALE_ITEM_ALREADY_ASSOCIATED':
-        return new Error('La selección incluye artículos ya asociados a otra liquidación.');
       case 'SALE_ITEM_WITHOUT_HISTORICAL_COST':
         return new Error('No pudimos calcular el importe histórico de uno de los artículos seleccionados.');
+      case 'NO_LIQUIDATION_DUE':
+        return new Error('La selección no tiene importe para liquidar ahora.');
       case 'BATCH_NOT_FOUND':
         return new Error('No encontramos la liquidación solicitada.');
       default:

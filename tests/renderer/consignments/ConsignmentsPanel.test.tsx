@@ -49,6 +49,7 @@ const successBatch: ConfirmConsignmentBatchResult = {
   itemCount: 1,
   totalCents: 90000,
   totalGainCents: 30000,
+  remainingCents: 0,
   notes: null,
   createdAt: '2026-07-20T10:00:00.000Z'
 };
@@ -70,6 +71,13 @@ const detail: ConsignmentBatchDetail = {
       personalizationCents: null,
       saleTotalCents: 120000,
       amountCents: 90000,
+      saleStatus: 'paid',
+      salePaidCents: 120000,
+      saleBalanceCents: 0,
+      paymentMethodSummary: 'Efectivo: $ 1.200,00',
+      liquidatedPreviouslyCents: 0,
+      totalAccumulatedCents: 90000,
+      remainingBalanceCents: 0,
       productGainCents: 30000,
       personalizationGainCents: 0,
       gainCents: 30000,
@@ -87,6 +95,7 @@ const historyItems: ConsignmentBatchHistoryListItem[] = [
     itemCount: 2,
     totalCents: 150000,
     totalGainCents: 45000,
+    remainingCents: 0,
     notes: 'Segunda tanda',
     createdAt: '2026-07-21T10:00:00.000Z'
   }
@@ -201,6 +210,39 @@ describe('ConsignmentsPanel', () => {
     expect(markup).toContain('value="2026-07-17"');
   });
 
+  it('shows sale-status badges and the pending/after supplier balance labels required by liquidation semantics', () => {
+    const markup = renderToStaticMarkup(
+      <ConsignmentsPanel
+        bridge={createBridge()}
+        initialState={{
+          view: 'pending',
+          pendingItems: [
+            {
+              saleItemId: 10,
+              productName: 'Aros parciales',
+              saleNumber: 12,
+              saleDate: '2026-07-16T10:00:00.000Z',
+              buyerName: 'Ana',
+              saleStatus: 'partial_payment',
+              salePaidCents: 20000,
+              saleBalanceCents: 100000,
+              amountCents: 90000,
+              liquidatedPreviouslyCents: 0,
+              gainCents: 2000
+            }
+          ],
+          selectedIds: [10],
+          showConfirmBlock: true,
+          successBatch
+        }}
+      />
+    );
+
+    expect(markup).toContain('Saldo pendiente con el proveedor');
+    expect(markup).toContain('Saldo proveedor después de liquidar');
+    expect(markup).toContain('Pago parcial');
+  });
+
   it('calls exportBatchExcel from the success-state export CTA with the success batch id', async () => {
     const bridge = createBridge();
     const exportBatchExcel = vi.fn<() => Promise<ExportConsignmentBatchExcelResult>>().mockResolvedValue({
@@ -220,7 +262,7 @@ describe('ConsignmentsPanel', () => {
       }
     });
 
-    await view.clickButton('Exportar comprobante Excel');
+    await view.clickButton('Exportar liquidación');
 
     expect(exportBatchExcel).toHaveBeenCalledWith({ batchId: 3 });
     expect(view.getStatus()).toContain('Comprobante Excel de la liquidación 18 exportado correctamente.');
@@ -248,7 +290,7 @@ describe('ConsignmentsPanel', () => {
       }
     });
 
-    const secondHistoryButton = view.getHistoryRowButton(historyItems[1].batchNumber, 'Exportar Excel');
+    const secondHistoryButton = view.getHistoryRowButton(historyItems[1].batchNumber, 'Exportar liquidación');
 
     await act(async () => {
       secondHistoryButton.click();
@@ -282,8 +324,7 @@ describe('ConsignmentsPanel', () => {
       }
     });
 
-    expect(defaultView.container.textContent).not.toContain('Exportar Excel');
-    expect(defaultView.container.textContent).not.toContain('Exportar comprobante Excel');
+    expect(defaultView.container.textContent).not.toContain('Exportar liquidación');
 
     await act(async () => {
       const checkbox = defaultView.container.querySelector('input[aria-label="Seleccionar Aros de plata"]');
@@ -294,12 +335,13 @@ describe('ConsignmentsPanel', () => {
       await flush();
     });
 
-    await defaultView.clickButton('Confirmar liquidación');
+    await defaultView.clickButton('Revisar liquidación');
 
     expect(defaultView.container.querySelector('[aria-label="confirmar-liquidacion"]')).not.toBeNull();
+    expect(defaultView.container.textContent).toContain('Revisar liquidación');
+    expect(defaultView.container.textContent).toContain('Confirmar liquidación');
 
-    expect(defaultView.container.textContent).not.toContain('Exportar Excel');
-    expect(defaultView.container.textContent).not.toContain('Exportar comprobante Excel');
+    expect(defaultView.container.textContent).not.toContain('Exportar liquidación');
 
     await defaultView.cleanup();
   });
@@ -324,7 +366,7 @@ describe('ConsignmentsPanel', () => {
       }
     });
 
-    await view.clickButton('Exportar Excel');
+    await view.clickButton('Exportar liquidación');
 
     expect(exportBatchExcel).toHaveBeenCalledWith({ batchId: 11 });
 
@@ -359,13 +401,13 @@ describe('ConsignmentsPanel', () => {
       }
     });
 
-    await view.clickButton('Exportar comprobante Excel');
+    await view.clickButton('Exportar liquidación');
     expect(view.getStatus()).toContain('Comprobante Excel de la liquidación 18 exportado correctamente.');
 
-    await view.clickButton('Exportar comprobante Excel');
+    await view.clickButton('Exportar liquidación');
     expect(view.getStatus()).toContain('No exportamos el archivo porque cancelaste la ubicación de guardado.');
 
-    await view.clickButton('Exportar comprobante Excel');
+    await view.clickButton('Exportar liquidación');
     expect(view.getStatus()).toContain('Falló la exportación de Excel.');
 
     await view.cleanup();
@@ -399,9 +441,9 @@ describe('ConsignmentsPanel', () => {
       }
     });
 
-    const firstHistoryButton = view.getHistoryRowButton(historyItems[0].batchNumber, 'Exportar Excel');
-    const secondHistoryButton = view.getHistoryRowButton(historyItems[1].batchNumber, 'Exportar Excel');
-    const successButton = view.getButton('Exportar comprobante Excel');
+    const firstHistoryButton = view.getHistoryRowButton(historyItems[0].batchNumber, 'Exportar liquidación');
+    const secondHistoryButton = view.getHistoryRowButton(historyItems[1].batchNumber, 'Exportar liquidación');
+    const successButton = view.getButton('Exportar liquidación');
 
     await act(async () => {
       secondHistoryButton.click();
@@ -427,8 +469,42 @@ describe('ConsignmentsPanel', () => {
     });
 
     expect(secondHistoryButton.disabled).toBe(false);
-    expect(secondHistoryButton.textContent).toBe('Exportar Excel');
+    expect(secondHistoryButton.textContent).toBe('Exportar liquidación');
 
     await view.cleanup();
+  });
+
+  it('renders the redesigned stage overview and visual summary cards in pending view', () => {
+    const markup = renderToStaticMarkup(
+      <ConsignmentsPanel
+        bridge={createBridge()}
+        initialState={{
+          view: 'pending',
+          pendingItems: [
+            {
+              saleItemId: 10,
+              productName: 'Aros parciales',
+              saleNumber: 12,
+              saleDate: '2026-07-16T10:00:00.000Z',
+              buyerName: 'Ana',
+              saleStatus: 'partial_payment',
+              salePaidCents: 20000,
+              saleBalanceCents: 100000,
+              amountCents: 90000,
+              liquidatedPreviouslyCents: 0,
+              gainCents: 2000
+            }
+          ],
+          selectedIds: [10],
+          showConfirmBlock: true
+        }}
+      />
+    );
+
+    expect(markup).toContain('etapas-liquidaciones');
+    expect(markup).toContain('Revisar liquidación');
+    expect(markup).toContain('Paso previo');
+    expect(markup).toContain('Importe a pagar ahora');
+    expect(markup).toContain('Saldo pendiente con el proveedor');
   });
 });

@@ -20,7 +20,7 @@ const nativeBinaryPath = path.join(
   'Release',
   'better_sqlite3.node'
 );
-const stateDirectoryPath = path.join(repoRoot, 'node_modules', '.cache', 'project-mama');
+const stateDirectoryPath = path.join(repoRoot, 'node_modules', '.cache', 'ordena');
 const stateFilePath = path.join(stateDirectoryPath, 'better-sqlite3-target.json');
 
 const targetConfigurations = {

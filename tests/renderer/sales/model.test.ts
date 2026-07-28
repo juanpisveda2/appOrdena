@@ -5,15 +5,18 @@ import {
   buildCancelPaymentRequest,
   buildConfirmSaleDraftRequest,
   canAssignCustomerForPaymentRecovery,
-    createInitialSalesState,
-    createSalesActions,
-    getCustomerRuleFeedback,
-    getDraftGainTotals,
-    getDraftItemGainPreview,
-    shouldShowExpectedProfit,
-    shouldShowPendingBalance,
-    type SalesState
-  } from '../../../src/renderer/features/sales/model';
+  createInitialSalesState,
+  createSalesActions,
+  getAvailableSalesSearchResults,
+  getCustomerRuleFeedback,
+  getDraftGainTotals,
+  getDraftItemGainPreview,
+  getSalesHistoryPage,
+  getSalesHistoryPageCount,
+  shouldShowExpectedProfit,
+  shouldShowPendingBalance,
+  type SalesState
+} from '../../../src/renderer/features/sales/model';
 
 function createHarness(initialState = createInitialSalesState()) {
   let state = initialState;
@@ -44,9 +47,11 @@ function createBridge(overrides?: Partial<AppBridge>): AppBridge {
         currentCashPriceCents: 120000,
         currentListPriceCents: 125000,
         currentProfitPercentageBasisPoints: 1000,
-        currentExpectedProfitCents: 10000,
+        currentCashExpectedProfitCents: 12000,
+        currentListExpectedProfitCents: 12500,
         currentPersonalizationExpectedProfitCents: null,
-        currentTotalExpectedProfitCents: 10000,
+        currentCashTotalExpectedProfitCents: 12000,
+        currentListTotalExpectedProfitCents: 12500,
       recentIntakes: []
       }),
       updateProduct: vi.fn(),
@@ -77,6 +82,7 @@ function createBridge(overrides?: Partial<AppBridge>): AppBridge {
 describe('sales renderer model', () => {
   it('requires customer name and phone when the draft keeps a pending balance', () => {
     const state = createInitialSalesState();
+    state.historyPage = 3;
     state.draftItems = [
       {
         reusableProductId: 1,
@@ -86,9 +92,9 @@ describe('sales renderer model', () => {
         availableQuantity: 2,
         cashPriceCents: 120000,
         listPriceCents: 125000,
-        expectedProfitCents: 10000,
+        cashExpectedProfitCents: 12000,
+        listExpectedProfitCents: 12500,
         personalizationExpectedProfitCents: null,
-        totalExpectedProfitCents: 10000,
         quantity: 1,
         priceType: 'cash'
       }
@@ -121,7 +127,8 @@ describe('sales renderer model', () => {
     });
     expect(harness.getState().draftItems[0]).toEqual(
       expect.objectContaining({
-        productExpectedProfitCents: 10000,
+        cashExpectedProfitCents: 12000,
+        listExpectedProfitCents: 12500,
         hasPersonalization: false,
         personalizationPercentage: '5'
       })
@@ -139,9 +146,9 @@ describe('sales renderer model', () => {
         availableQuantity: 4,
         cashPriceCents: 120000,
         listPriceCents: 125000,
-        expectedProfitCents: 10000,
+        cashExpectedProfitCents: 12000,
+        listExpectedProfitCents: 12500,
         personalizationExpectedProfitCents: 500,
-        totalExpectedProfitCents: 10500,
         quantity: 2,
         priceType: 'cash'
       },
@@ -153,23 +160,23 @@ describe('sales renderer model', () => {
         availableQuantity: 2,
         cashPriceCents: 80000,
         listPriceCents: 85000,
-        expectedProfitCents: 8000,
+        cashExpectedProfitCents: 8000,
+        listExpectedProfitCents: 8500,
         personalizationExpectedProfitCents: null,
-        totalExpectedProfitCents: 8000,
         quantity: 1,
         priceType: 'list'
       }
     ];
 
     expect(getDraftItemGainPreview(state.draftItems[0])).toEqual({
-      productGainCents: 20000,
+      productGainCents: 24000,
       personalizationGainCents: 1000,
-      totalExpectedProfitCents: 21000
+      totalExpectedProfitCents: 25000
     });
     expect(getDraftGainTotals(state)).toEqual({
-      productGainCents: 28000,
+      productGainCents: 32500,
       personalizationGainCents: 1000,
-      totalExpectedProfitCents: 29000
+      totalExpectedProfitCents: 33500
     });
   });
 
@@ -179,6 +186,25 @@ describe('sales renderer model', () => {
     expect(shouldShowExpectedProfit(10000, null)).toBe(true);
     expect(shouldShowPendingBalance(0)).toBe(false);
     expect(shouldShowPendingBalance(1)).toBe(true);
+  });
+
+  it('paginates filtered history results in pages of six items', () => {
+    const results = Array.from({ length: 7 }, (_, index) => ({
+      saleId: index + 1,
+      saleNumber: 100 + index,
+      saleDate: '2026-07-16T10:00:00.000Z',
+      status: 'paid' as const,
+      totalCents: 10000,
+      paidCents: 10000,
+      balanceCents: 0,
+      customerName: `Cliente ${index + 1}`,
+      customerPhoneText: null,
+      totalProfitCents: 1000
+    }));
+
+    expect(getSalesHistoryPageCount(results)).toBe(2);
+    expect(getSalesHistoryPage(results, 1)).toHaveLength(6);
+    expect(getSalesHistoryPage(results, 2)).toEqual([results[6]]);
   });
 
   it('searches products from the first typed character and clears results when emptied', async () => {
@@ -218,6 +244,73 @@ describe('sales renderer model', () => {
     expect(harness.getState().searchResults).toEqual([]);
   });
 
+  it('filters out products without stock from sales search results', () => {
+    expect(
+      getAvailableSalesSearchResults([
+        {
+          reusableProductId: 1,
+          category: 'jewelry',
+          name: 'Aros de plata',
+          material: 'Plata',
+          variant: '18 mm',
+          availableQuantity: 2,
+          isOutOfStock: false
+        },
+        {
+          reusableProductId: 2,
+          category: 'mate',
+          name: 'Mate verde',
+          material: 'Calabaza',
+          variant: 'XL',
+          availableQuantity: 0,
+          isOutOfStock: true
+        }
+      ])
+    ).toEqual([
+      expect.objectContaining({
+        reusableProductId: 1,
+        name: 'Aros de plata'
+      })
+    ]);
+  });
+
+  it('does not add a product to the draft when its detail has no available stock', async () => {
+    const bridge = createBridge({
+      catalog: {
+        list: vi.fn(),
+        search: vi.fn().mockResolvedValue([]),
+        getProductDetail: vi.fn().mockResolvedValue({
+          reusableProductId: 1,
+          category: 'jewelry',
+          name: 'Aros de plata',
+          description: null,
+          material: 'Plata',
+          variant: '18 mm',
+          availableQuantity: 0,
+          currentCashPriceCents: 120000,
+          currentListPriceCents: 125000,
+          currentProfitPercentageBasisPoints: 1000,
+          currentCashExpectedProfitCents: 12000,
+          currentListExpectedProfitCents: 12500,
+          currentPersonalizationExpectedProfitCents: null,
+          currentCashTotalExpectedProfitCents: 12000,
+          currentListTotalExpectedProfitCents: 12500,
+          recentIntakes: []
+        }),
+        updateProduct: vi.fn(),
+        deleteProduct: vi.fn()
+      }
+    });
+    const harness = createHarness();
+    const actions = createSalesActions({ bridge, ...harness });
+
+    await actions.addProduct(1);
+
+    expect(harness.getState().draftItems).toEqual([]);
+    expect(harness.getState().submitStatus).toBe('error');
+    expect(harness.getState().submitMessage).toBe('Este producto ya no tiene stock disponible para vender.');
+  });
+
   it('removes a draft item before confirmation so only the remaining item reaches review', async () => {
     const bridge = createBridge({
       catalog: {
@@ -236,9 +329,11 @@ describe('sales renderer model', () => {
             currentCashPriceCents: 120000,
             currentListPriceCents: 125000,
             currentProfitPercentageBasisPoints: 1000,
-            currentExpectedProfitCents: 10000,
+            currentCashExpectedProfitCents: 12000,
+            currentListExpectedProfitCents: 12500,
             currentPersonalizationExpectedProfitCents: null,
-            currentTotalExpectedProfitCents: 10000,
+            currentCashTotalExpectedProfitCents: 12000,
+            currentListTotalExpectedProfitCents: 12500,
             recentIntakes: []
           })
           .mockResolvedValueOnce({
@@ -252,9 +347,11 @@ describe('sales renderer model', () => {
             currentCashPriceCents: 80000,
             currentListPriceCents: 85000,
             currentProfitPercentageBasisPoints: 1000,
-            currentExpectedProfitCents: 10000,
+            currentCashExpectedProfitCents: 8000,
+            currentListExpectedProfitCents: 8500,
             currentPersonalizationExpectedProfitCents: null,
-            currentTotalExpectedProfitCents: 10000,
+            currentCashTotalExpectedProfitCents: 8000,
+            currentListTotalExpectedProfitCents: 8500,
             recentIntakes: []
           }),
         updateProduct: vi.fn(),
@@ -345,9 +442,9 @@ describe('sales renderer model', () => {
         availableQuantity: 2,
         cashPriceCents: 120000,
         listPriceCents: 125000,
-        expectedProfitCents: 10000,
+        cashExpectedProfitCents: 12000,
+        listExpectedProfitCents: 12500,
         personalizationExpectedProfitCents: null,
-        totalExpectedProfitCents: 10000,
         quantity: 1,
         priceType: 'cash'
       }
@@ -357,10 +454,11 @@ describe('sales renderer model', () => {
 
     await actions.openHistory();
 
-    expect(listHistory).toHaveBeenCalledWith({ query: '', limit: 20 });
+    expect(listHistory).toHaveBeenCalledWith({ query: '', limit: 60 });
     expect(harness.getState().view).toBe('history');
     expect(harness.getState().historyReturnView).toBe('draft');
     expect(harness.getState().historyResults).toHaveLength(1);
+    expect(harness.getState().historyPage).toBe(1);
 
     await actions.openSaleDetail(7);
 

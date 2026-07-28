@@ -6,6 +6,10 @@ import { catalogSoftDeleteMigration } from './migrations/v005_catalogSoftDelete'
 import { consignmentBatchGainMigration } from './migrations/v006_consignmentBatchGain';
 import { historicalSnapshotsResetMigration } from './migrations/v007_historicalSnapshotsReset';
 import { saleItemPersonalizationSnapshotsMigration } from './migrations/v008_saleItemPersonalizationSnapshots';
+import { partialConsignmentLiquidationsMigration } from './migrations/v009_partialConsignmentLiquidations';
+import { profitRuleByPriceBaseMigration } from './migrations/v010_profitRuleByPriceBase';
+import { consignmentLiquidationSnapshotsMigration } from './migrations/v011_consignmentLiquidationSnapshots';
+import { appBrandingMetadataMigration } from './migrations/v012_appBrandingMetadata';
 import type { SqliteDatabaseLike } from './connection';
 
 export interface Migration {
@@ -28,7 +32,11 @@ const foundationMigrations: readonly Migration[] = [
   catalogSoftDeleteMigration,
   consignmentBatchGainMigration,
   historicalSnapshotsResetMigration,
-  saleItemPersonalizationSnapshotsMigration
+  saleItemPersonalizationSnapshotsMigration,
+  partialConsignmentLiquidationsMigration,
+  profitRuleByPriceBaseMigration,
+  consignmentLiquidationSnapshotsMigration,
+  appBrandingMetadataMigration
 ];
 
 export function getSchemaVersion(database: SqliteDatabaseLike): number {

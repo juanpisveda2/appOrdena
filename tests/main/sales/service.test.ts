@@ -350,12 +350,12 @@ describe('sales service', () => {
         saleNumber: sale.saleNumber,
         customerName: 'Ana',
         customerPhoneText: '3510000000',
-        totalProfitCents: 10_000
+        totalProfitCents: 12_000
       })
     ]);
 
     expect(getSaleDetail(initialized.database, { saleId: sale.saleId })).toEqual(
-      expect.objectContaining({ saleId: sale.saleId, saleNumber: sale.saleNumber, totalProfitCents: 10_000 })
+      expect.objectContaining({ saleId: sale.saleId, saleNumber: sale.saleNumber, totalProfitCents: 12_000 })
     );
 
     initialized.database.close();
@@ -528,8 +528,8 @@ describe('sales service', () => {
     const historySale = listSalesHistory(initialized.database, { query: 'Luz', limit: 10 })[0];
     const detailSale = getSaleDetail(initialized.database, { saleId: sale.saleId });
 
-    expect(historySale?.totalProfitCents).toBe(9_000);
-    expect(detailSale.totalProfitCents).toBe(9_000);
+    expect(historySale?.totalProfitCents).toBe(12_000);
+    expect(detailSale.totalProfitCents).toBe(12_000);
 
     initialized.database.close();
   });
@@ -603,17 +603,17 @@ describe('sales service', () => {
     const detailSale = getSaleDetail(initialized.database, { saleId: sale.saleId });
 
     expect(persistedRow).toEqual({
-      productGainCents: 60_000,
+      productGainCents: 89_000,
       personalizationGainCents: 1_000,
-      totalGainCents: 61_000
+      totalGainCents: 90_000
     });
-    expect(historySale?.totalProfitCents).toBe(61_000);
-    expect(detailSale.totalProfitCents).toBe(61_000);
+    expect(historySale?.totalProfitCents).toBe(90_000);
+    expect(detailSale.totalProfitCents).toBe(90_000);
     expect(detailSale.items[0]).toEqual(
       expect.objectContaining({
-        productGainCents: 60_000,
+        productGainCents: 89_000,
         personalizationGainCents: 1_000,
-        totalGainCents: 61_000
+        totalGainCents: 90_000
       })
     );
 

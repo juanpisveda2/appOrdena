@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  configureDesktopIdentity,
+  ORDENA_DEV_USER_DATA_DIRECTORY_NAME,
   registerDesktopLifecycle,
   resolveDesktopWindowIconPath,
   type AppLike,
@@ -10,12 +12,20 @@ import type { InitializedApp } from '../../../src/main/bootstrap/initializeApp';
 class FakeBrowserWindow implements BrowserWindowLike {
   static instances: FakeBrowserWindow[] = [];
   static windows: FakeBrowserWindow[] = [];
+  static loadURLMock = vi.fn().mockResolvedValue(undefined);
+  static loadFileMock = vi.fn().mockResolvedValue(undefined);
 
   readonly options: Electron.BrowserWindowConstructorOptions;
   readonly onceHandlers = new Map<string, () => void>();
-  loadURL = vi.fn<BrowserWindowLike['loadURL']>().mockResolvedValue();
-  loadFile = vi.fn<BrowserWindowLike['loadFile']>().mockResolvedValue();
+  readonly webContentsHandlers = new Map<'did-fail-load' | 'render-process-gone', (...args: unknown[]) => void>();
+  loadURL = (url: string): Promise<void> => FakeBrowserWindow.loadURLMock(url);
+  loadFile = (filePath: string): Promise<void> => FakeBrowserWindow.loadFileMock(filePath);
   show = vi.fn<BrowserWindowLike['show']>();
+  webContents = {
+    on: vi.fn((event: 'did-fail-load' | 'render-process-gone', listener: (...args: unknown[]) => void) => {
+      this.webContentsHandlers.set(event, listener);
+    })
+  };
 
   constructor(options: Electron.BrowserWindowConstructorOptions) {
     this.options = options;
@@ -37,7 +47,7 @@ class FakeBrowserWindow implements BrowserWindowLike {
 }
 
 interface AppDouble extends AppLike {
-  getPath(name: 'userData'): string;
+  getPath(name: 'appData' | 'userData'): string;
   __handlers: Map<string, () => void>;
 }
 
@@ -53,7 +63,12 @@ function createAppDouble(): AppDouble {
     getVersion: vi.fn(() => '0.1.0'),
     getAppPath: vi.fn(() => 'C:\\dev\\project-mamá'),
     isPackaged: false,
-    getPath: vi.fn(() => 'C:\\Users\\tester\\AppData\\Roaming\\ProjectMama'),
+    getPath: vi.fn((name: 'appData' | 'userData') =>
+      name === 'appData' ? 'C:\\Users\\tester\\AppData\\Roaming' : 'C:\\Users\\tester\\AppData\\Roaming\\Ordena Dev'
+    ),
+    setAppUserModelId: vi.fn(),
+    setName: vi.fn(),
+    setPath: vi.fn(),
     __handlers: eventHandlers
   };
 }
@@ -61,8 +76,8 @@ function createAppDouble(): AppDouble {
 function createInitializedApp(): InitializedApp {
   return {
     paths: {
-      userDataDirectory: 'C:\\Users\\tester\\AppData\\Roaming\\ProjectMama',
-      databaseFilePath: 'C:\\Users\\tester\\AppData\\Roaming\\ProjectMama\\project-mama.sqlite'
+      userDataDirectory: 'C:\\Users\\tester\\AppData\\Roaming\\Ordena Dev',
+      databaseFilePath: 'C:\\Users\\tester\\AppData\\Roaming\\Ordena Dev\\ordena.sqlite'
     },
     database: {
       client: {} as never,
@@ -80,9 +95,11 @@ function createInitializedApp(): InitializedApp {
 
 describe('registerDesktopLifecycle', () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
     FakeBrowserWindow.instances = [];
     FakeBrowserWindow.windows = [];
-    vi.restoreAllMocks();
+    FakeBrowserWindow.loadURLMock = vi.fn().mockResolvedValue(undefined);
+    FakeBrowserWindow.loadFileMock = vi.fn().mockResolvedValue(undefined);
   });
 
   it('smoke-verifies the desktop startup path with secure window settings and foundation health wiring', async () => {
@@ -101,6 +118,12 @@ describe('registerDesktopLifecycle', () => {
 
     await Promise.resolve();
 
+    expect(app.setName).toHaveBeenCalledWith('Ordena');
+    expect(app.setAppUserModelId).toHaveBeenCalledWith('com.ordena.desktop');
+    expect(app.setPath).toHaveBeenCalledWith(
+      'userData',
+      'C:\\Users\\tester\\AppData\\Roaming\\Ordena Dev'
+    );
     expect(initializeApplication).toHaveBeenCalledWith({ pathProvider: app });
     expect(registerIpcHandlers).toHaveBeenCalledWith({
       bootstrapState: initializedApp.state,
@@ -117,9 +140,11 @@ describe('registerDesktopLifecycle', () => {
       sandbox: true
     });
     expect(window.options.icon).toBe(resolveDesktopWindowIconPath(app));
-    expect(window.loadFile).toHaveBeenCalledWith(
-      expect.stringContaining('src\\main\\renderer\\main_window\\index.html')
+    expect(FakeBrowserWindow.loadFileMock).toHaveBeenCalledWith(
+      'C:\\dev\\project-mamá\\src\\renderer\\.vite\\renderer\\main_window\\index.html'
     );
+    expect(window.webContents.on).toHaveBeenCalledWith('did-fail-load', expect.any(Function));
+    expect(window.webContents.on).toHaveBeenCalledWith('render-process-gone', expect.any(Function));
 
     window.emit('ready-to-show');
     expect(window.show).toHaveBeenCalledTimes(1);
@@ -149,11 +174,46 @@ describe('registerDesktopLifecycle', () => {
       value: 'C:\\build\\resources'
     });
 
-    expect(resolveDesktopWindowIconPath(app)).toBe('C:\\build\\resources\\windows\\ordena-icon.ico');
+    expect(resolveDesktopWindowIconPath(app)).toBe('C:\\build\\resources\\branding\\windows\\ordena-icon.ico');
 
     Object.defineProperty(process, 'resourcesPath', {
       configurable: true,
       value: originalResourcesPath
     });
+  });
+
+  it('uses a dedicated dev userData directory before ready so packaged and local databases stay separated', () => {
+    const app = createAppDouble();
+
+    configureDesktopIdentity(app);
+
+    expect(app.setPath).toHaveBeenCalledWith(
+      'userData',
+      `C:\\Users\\tester\\AppData\\Roaming\\${ORDENA_DEV_USER_DATA_DIRECTORY_NAME}`
+    );
+  });
+
+  it('logs renderer load failures instead of leaving startup silent', async () => {
+    const app = createAppDouble();
+    const error = new Error('missing renderer entry');
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    FakeBrowserWindow.loadFileMock.mockRejectedValueOnce(error);
+
+    registerDesktopLifecycle({
+      app,
+      BrowserWindow: FakeBrowserWindow,
+      initializeApplication: vi.fn(() => createInitializedApp()),
+      registerIpcHandlers: vi.fn(),
+      mainWindowRendererViteName: 'main_window'
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(consoleError).toHaveBeenCalledWith(
+      '[desktop] Failed to load renderer file: C:\\dev\\project-mamá\\src\\renderer\\.vite\\renderer\\main_window\\index.html',
+      error
+    );
   });
 });

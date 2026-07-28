@@ -51,11 +51,13 @@ export interface CatalogProductRecentIntake {
   cashPriceCents: number;
   listPriceCents: number;
   profitPercentageBasisPoints: number;
-  expectedProfitCents: number;
+  cashExpectedProfitCents: number;
+  listExpectedProfitCents: number;
   personalizationAmountCents: number | null;
   personalizationPercentageBasisPoints: number | null;
   personalizationExpectedProfitCents: number | null;
-  totalExpectedProfitCents: number;
+  cashTotalExpectedProfitCents: number;
+  listTotalExpectedProfitCents: number;
   intakeDate: string;
   notes: string | null;
 }
@@ -71,9 +73,11 @@ export interface CatalogProductDetail {
   currentCashPriceCents: number | null;
   currentListPriceCents: number | null;
   currentProfitPercentageBasisPoints: number | null;
-  currentExpectedProfitCents: number | null;
+  currentCashExpectedProfitCents: number | null;
+  currentListExpectedProfitCents: number | null;
   currentPersonalizationExpectedProfitCents: number | null;
-  currentTotalExpectedProfitCents: number | null;
+  currentCashTotalExpectedProfitCents: number | null;
+  currentListTotalExpectedProfitCents: number | null;
   recentIntakes: CatalogProductRecentIntake[];
 }
 

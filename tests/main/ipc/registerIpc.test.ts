@@ -70,7 +70,7 @@ describe('registerIpc', () => {
       appVersion: '0.1.0',
       runtime: 'desktop-foundation',
       dbReady: true,
-      schemaVersion: 8
+      schemaVersion: 10
     });
 
     expect(
@@ -149,9 +149,11 @@ describe('registerIpc', () => {
       currentCashPriceCents: 120000,
       currentListPriceCents: 125000,
       currentProfitPercentageBasisPoints: 1000,
-      currentExpectedProfitCents: 10000,
+      currentCashExpectedProfitCents: 12000,
+      currentListExpectedProfitCents: 12500,
       currentPersonalizationExpectedProfitCents: null,
-      currentTotalExpectedProfitCents: 10000,
+      currentCashTotalExpectedProfitCents: 12000,
+      currentListTotalExpectedProfitCents: 12500,
       recentIntakes: [
         {
           stockIntakeId: 1,
@@ -161,11 +163,13 @@ describe('registerIpc', () => {
           cashPriceCents: 120000,
           listPriceCents: 125000,
           profitPercentageBasisPoints: 1000,
-          expectedProfitCents: 10000,
+          cashExpectedProfitCents: 12000,
+          listExpectedProfitCents: 12500,
           personalizationAmountCents: null,
           personalizationPercentageBasisPoints: null,
           personalizationExpectedProfitCents: null,
-          totalExpectedProfitCents: 10000,
+          cashTotalExpectedProfitCents: 12000,
+          listTotalExpectedProfitCents: 12500,
           intakeDate: '2026-07-14',
           notes: null
         }
@@ -346,7 +350,7 @@ describe('registerIpc', () => {
     });
 
     const workbook = await loadWorkbook(writtenBuffer);
-    expect(workbook.worksheets.map((worksheet) => worksheet.name)).toEqual(['Summary', 'Detail']);
+    expect(workbook.worksheets.map((worksheet) => worksheet.name)).toEqual(['Resumen', 'Detalle']);
 
     initialized.database.close();
   });

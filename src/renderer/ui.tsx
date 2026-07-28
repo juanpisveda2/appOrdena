@@ -4,6 +4,8 @@ function cx(...tokens: Array<string | false | null | undefined>): string {
   return tokens.filter(Boolean).join(' ');
 }
 
+export const portadaSrc = new URL('../../assets/branding/appOrdena-portada.png', import.meta.url).href;
+
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'success' | 'nav';
 
 export function Button({
@@ -117,24 +119,36 @@ export function AppShell({
     ['sales', 'Ventas'],
     ['consignments', 'Liquidaciones']
   ] as const;
+  const activeSectionLabel = items.find(([itemView]) => itemView === view)?.[1] ?? 'Sección actual';
 
   return (
     <main className="app-shell">
       <div className="app-shell__inner">
         <header className="app-topbar">
           <div className="app-brand">
-            <h1 className="app-brand__name">Ordena</h1>
+            <div className="app-brand__headline">
+              <h1 className="app-brand__name">Ordena</h1>
+            </div>
             <p className="app-brand__description">Gestión de stock y ventas</p>
           </div>
           <nav className="top-nav" aria-label="Navegación principal">
             {items.map(([itemView, label]) => (
-              <Button key={itemView} type="button" variant="nav" active={view === itemView} onClick={() => onChangeView(itemView)}>
+              <Button
+                key={itemView}
+                type="button"
+                variant="nav"
+                active={view === itemView}
+                aria-current={view === itemView ? 'page' : undefined}
+                onClick={() => onChangeView(itemView)}
+              >
                 {label}
               </Button>
             ))}
           </nav>
         </header>
-        <div className="page-stack">{children}</div>
+        <section className={cx('page-stack', 'page-stack__section', `page-stack__section--${view}`)} aria-label={activeSectionLabel}>
+          {children}
+        </section>
       </div>
     </main>
   );
