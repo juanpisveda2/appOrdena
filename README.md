@@ -121,6 +121,10 @@ Aunque el instalador ya se genera correctamente en entorno de desarrollo, **no s
 - firma de código para distribución
 - más pulido visual y consistencia entre módulos
 
+## Link directo al instalador
+
+https://drive.google.com/drive/folders/1sbADoOrOV388PT6bdgEZqDkJG8h5E0yA?usp=sharing
+
 ## Autoría
 
 Proyecto: **Ordena**  
