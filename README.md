@@ -125,3 +125,5 @@ Aunque el instalador ya se genera correctamente en entorno de desarrollo, **no s
 
 Proyecto: **Ordena**  
 Descripción: **Gestión de stock y ventas**
+
+ * Copyright (c) 2026 Juan Pablo Sveda
