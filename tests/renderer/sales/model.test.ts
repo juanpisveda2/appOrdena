@@ -9,8 +9,10 @@ import {
   createSalesActions,
   getAvailableSalesSearchResults,
   getCustomerRuleFeedback,
+  getDraftQuantityForProduct,
   getDraftGainTotals,
   getDraftItemGainPreview,
+  getDraftTotalQuantity,
   getSalesHistoryPage,
   getSalesHistoryPageCount,
   shouldShowExpectedProfit,
@@ -133,6 +135,20 @@ describe('sales renderer model', () => {
         personalizationPercentage: '5'
       })
     );
+    expect(getDraftQuantityForProduct(harness.getState().draftItems, 1)).toBe(1);
+    expect(getDraftTotalQuantity(harness.getState().draftItems)).toBe(1);
+  });
+
+  it('tracks added quantity per product and across the whole sale draft', async () => {
+    const bridge = createBridge();
+    const harness = createHarness();
+    const actions = createSalesActions({ bridge, ...harness });
+
+    await actions.addProduct(1);
+    await actions.addProduct(1);
+
+    expect(getDraftQuantityForProduct(harness.getState().draftItems, 1)).toBe(2);
+    expect(getDraftTotalQuantity(harness.getState().draftItems)).toBe(2);
   });
 
   it('scales the gain preview from the product snapshot by quantity and totals it across the draft', () => {
@@ -477,7 +493,7 @@ describe('sales renderer model', () => {
     expect(harness.getState().draftItems).toHaveLength(1);
   });
 
-  it('confirms the sale, then registers a later payment and updates the detail snapshot', async () => {
+  it('confirms the sale, redirects to history, and refreshes the sales list', async () => {
     const confirmDraft = vi.fn().mockResolvedValue({
       saleId: 7,
       saleNumber: 12,
@@ -499,33 +515,26 @@ describe('sales renderer model', () => {
       canRegisterPayment: true,
       canCancelSale: true
     });
-    const registerPayment = vi.fn().mockResolvedValue({
-      saleId: 7,
-      saleNumber: 12,
-      saleDate: '2026-07-16T10:00:00.000Z',
-      status: 'paid',
-      totalCents: 120000,
-      paidCents: 120000,
-      balanceCents: 0,
-      cancellationReason: null,
-      customer: {
-        customerId: 1,
-        name: 'Ana',
-        phoneText: '3510000000',
-        note: null
-      },
-      items: [],
-      payments: [],
-      totalProfitCents: 30000,
-      canRegisterPayment: false,
-      canCancelSale: true
-    });
+    const listHistory = vi.fn().mockResolvedValue([
+      {
+        saleId: 7,
+        saleNumber: 12,
+        saleDate: '2026-07-16T10:00:00.000Z',
+        status: 'partial_payment',
+        totalCents: 120000,
+        paidCents: 20000,
+        balanceCents: 100000,
+        customerName: 'Ana',
+        customerPhoneText: '3510000000',
+        totalProfitCents: 30000
+      }
+    ]);
     const bridge = createBridge({
       sales: {
-        listHistory: vi.fn(),
+        listHistory,
         getById: vi.fn(),
         confirmDraft,
-        registerPayment,
+        registerPayment: vi.fn(),
         cancelPayment: vi.fn(),
         assignCustomerForPaymentRecovery: vi.fn(),
         cancelSale: vi.fn()
@@ -541,20 +550,20 @@ describe('sales renderer model', () => {
     actions.goToReview();
     await actions.confirmSale();
 
-    expect(harness.getState().view).toBe('detail');
     expect(confirmDraft).toHaveBeenCalled();
-
-    actions.updateDetailPaymentField('amount', '1000');
-    actions.updateDetailPaymentField('paymentMethod', 'bank_transfer');
-    await actions.registerPayment();
-
-    expect(registerPayment).toHaveBeenCalledWith({
-      saleId: 7,
-      amountCents: 100000,
-      paymentMethod: 'bank_transfer',
-      note: null
+    expect(listHistory).toHaveBeenCalledWith({
+      query: '',
+      limit: 60
     });
-    expect(harness.getState().currentSale?.status).toBe('paid');
+    expect(harness.getState().view).toBe('history');
+    expect(harness.getState().submitMessage).toBe('La venta #12 quedó confirmada.');
+    expect(harness.getState().draftItems).toEqual([]);
+    expect(harness.getState().historyResults).toEqual([
+      expect.objectContaining({
+        saleId: 7,
+        saleNumber: 12
+      })
+    ]);
   });
 
   it('requires a reason to cancel an active payment and sends the approved cancellation request', async () => {

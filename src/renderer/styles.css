@@ -637,6 +637,26 @@ textarea {
   margin-top: 4px;
 }
 
+.sales-cart-detail {
+  margin-top: -4px;
+}
+
+.sales-cart-detail--highlight {
+  display: inline-flex;
+  align-items: center;
+  padding: 10px 14px;
+  border: 1px solid #c8d5ff;
+  border-radius: var(--radius-md);
+  background: #f7faff;
+  color: var(--primary);
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.sales-search-result-status {
+  gap: 8px;
+}
+
 .sales-context-card {
   border-color: var(--border-subtle);
 }
@@ -709,59 +729,6 @@ textarea {
   margin-top: 14px;
 }
 
-.consignments-stages {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 10px;
-  padding: 14px;
-}
-
-.consignments-stage {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 10px;
-  align-items: flex-start;
-  padding: 12px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-surface-muted);
-}
-
-.consignments-stage--current {
-  border-color: #c8d5ff;
-  background: #f7faff;
-}
-
-.consignments-stage--complete {
-  border-color: #b7e2cb;
-  background: #f4fbf7;
-}
-
-.consignments-stage__index {
-  display: inline-grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 999px;
-  background: #ffffff;
-  border: 1px solid var(--border-subtle);
-  font-weight: 700;
-  color: var(--text-secondary);
-}
-
-.consignments-stage--current .consignments-stage__index {
-  background: var(--primary-soft);
-  border-color: #c8d5ff;
-  color: var(--primary);
-}
-
-.consignments-stage--complete .consignments-stage__index {
-  background: var(--success-soft);
-  border-color: #b7e2cb;
-  color: var(--success);
-}
-
-.consignments-stage__label,
 .consignments-summary-card__label,
 .consignments-metric-line__label {
   margin: 0;
@@ -772,7 +739,6 @@ textarea {
   color: var(--text-secondary);
 }
 
-.consignments-stage__hint,
 .consignments-inline-meta {
   margin: 4px 0 0;
   color: var(--text-muted);
@@ -804,6 +770,33 @@ textarea {
 
 .consignments-list-spaced {
   margin-top: 16px;
+}
+
+.consignments-selection-toolbar {
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid #d9e3ff;
+  border-radius: var(--radius-md);
+  background: #f7faff;
+}
+
+.consignments-selection-toolbar .button {
+  flex-shrink: 0;
+}
+
+.consignments-selection-toolbar__status {
+  flex: 1 1 240px;
+  font-size: 0.92rem;
+  color: var(--text-secondary);
+}
+
+.consignments-review-block .field__helper,
+.consignments-selection-toolbar .field__helper,
+.banner .banner__message {
+  font-size: 0.92rem;
 }
 
 .consignments-pending-row,
@@ -1163,5 +1156,9 @@ textarea {
   .catalog-product-detail-state__grid,
   .sales-summary-grid {
     grid-template-columns: 1fr;
+  }
+
+  .consignments-selection-toolbar {
+    align-items: stretch;
   }
 }

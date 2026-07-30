@@ -8,7 +8,7 @@ import type {
 } from '../../../shared/contracts/consignments';
 import { Badge, Banner, Button, EmptyState, Field, PageHeader, Surface } from '../../ui';
 import { formatCurrencyFromCents } from '../sales/model';
-import { getCurrentBusinessDate, summarizeSelection, togglePendingSelection } from './model';
+import { getCurrentBusinessDate, getSelectablePendingIds, summarizeSelection, toggleAllPendingSelections, togglePendingSelection } from './model';
 
 interface ConsignmentsPanelProps {
   bridge: AppBridge;
@@ -30,8 +30,6 @@ interface ConsignmentsPanelProps {
 }
 
 type View = 'pending' | 'history' | 'detail';
-
-type StageTone = 'current' | 'complete' | 'idle';
 
 export function ConsignmentsPanel({ bridge, onBack, initialState }: ConsignmentsPanelProps): JSX.Element {
   const [view, setView] = useState<View>(initialState?.view ?? 'pending');
@@ -56,7 +54,8 @@ export function ConsignmentsPanel({ bridge, onBack, initialState }: Consignments
     [pendingItems, historyItems, detail, selectedIds, liquidationDate, notes, successBatch, statusMessage]
   );
   const warningItems = selectedSummary.partialItems;
-  const stages = buildStages({ view, showConfirmBlock, successBatch });
+  const selectablePendingIds = useMemo(() => getSelectablePendingIds(pendingItems), [pendingItems]);
+  const allPendingSelected = selectablePendingIds.length > 0 && selectablePendingIds.every((saleItemId) => selectedIds.includes(saleItemId));
 
   useEffect(() => {
     void loadPending();
@@ -116,6 +115,10 @@ export function ConsignmentsPanel({ bridge, onBack, initialState }: Consignments
     setSelectedIds((current) => togglePendingSelection(current, saleItemId));
   }
 
+  function toggleAllSelections(): void {
+    setSelectedIds((current) => toggleAllPendingSelections(current, pendingItems));
+  }
+
   async function confirmBatch(): Promise<void> {
     setSubmitting(true);
 
@@ -166,7 +169,7 @@ export function ConsignmentsPanel({ bridge, onBack, initialState }: Consignments
     <section className="page-stack">
       <PageHeader
         title="Liquidaciones"
-        description="Liquidá artículos pendientes y consultá el historial sin perder la trazabilidad."
+        description="Elegí qué artículos liquidar, revisá los importes y consultá el historial cuando lo necesites."
         actions={
           <>
             <Button type="button" variant="nav" active={view === 'pending'} onClick={() => setView('pending')}>
@@ -184,17 +187,21 @@ export function ConsignmentsPanel({ bridge, onBack, initialState }: Consignments
         }
       />
 
-      <Surface className="consignments-stages" aria-label="etapas-liquidaciones">
-        {stages.map((stage, index) => (
-          <div className={`consignments-stage consignments-stage--${stage.tone}`} key={stage.label}>
-            <span className="consignments-stage__index">{index + 1}</span>
-            <div>
-              <p className="consignments-stage__label">{stage.label}</p>
-              <p className="consignments-stage__hint">{stage.hint}</p>
-            </div>
-          </div>
-        ))}
-      </Surface>
+      <Banner
+        tone="info"
+        title="Cómo seguir"
+        message={
+          view === 'history'
+            ? 'Acá podés revisar liquidaciones anteriores y abrir el detalle cuando lo necesites.'
+            : view === 'detail'
+              ? 'Acá ves el detalle completo de una liquidación ya confirmada.'
+              : successBatch
+                ? 'La liquidación ya quedó guardada. Si querés, ahora podés exportarla o revisar el historial.'
+                : showConfirmBlock
+                  ? 'Revisá los importes, elegí la fecha y confirmá solo cuando esté todo correcto.'
+                  : 'Primero marcá los artículos. Después tocá Revisar liquidación para controlar los importes antes de confirmar.'
+        }
+      />
 
       {statusMessage ? <Banner tone={statusKind === 'error' ? 'error' : statusKind === 'info' ? 'info' : 'success'} role="status" message={statusMessage} /> : null}
 
@@ -233,7 +240,7 @@ export function ConsignmentsPanel({ bridge, onBack, initialState }: Consignments
             <div className="page-header">
               <div>
                 <h3 className="surface__title">Pendientes de liquidación</h3>
-                <p className="surface__description">Seleccioná artículos para pasar a revisión antes de confirmar la liquidación.</p>
+                <p className="surface__description">Marcá los artículos que querés liquidar y después revisá los importes.</p>
               </div>
               <div className="actions">
                 <Button type="button" variant="secondary" onClick={() => void loadPending()}>
@@ -251,6 +258,19 @@ export function ConsignmentsPanel({ bridge, onBack, initialState }: Consignments
               <SummaryCard label="Saldo pendiente con el proveedor" value={formatCurrencyFromCents(selectedSummary.remainingCents)} />
               <SummaryCard label="Ganancia" value={formatCurrencyFromCents(selectedSummary.totalGainCents)} />
             </div>
+
+            {pendingItems.length > 0 ? (
+              <div className="cluster consignments-selection-toolbar">
+                <Button type="button" variant="secondary" onClick={toggleAllSelections}>
+                  {allPendingSelected ? 'Quitar todo' : 'Seleccionar todo'}
+                </Button>
+                <p className="field__helper consignments-selection-toolbar__status">
+                  {selectedSummary.count === 0
+                    ? 'Todavía no marcaste ningún artículo.'
+                    : `${selectedSummary.count} ${selectedSummary.count === 1 ? 'artículo marcado' : 'artículos marcados'}.`}
+                </p>
+              </div>
+            ) : null}
 
             {loadingPending ? <Banner tone="info" message="Cargando pendientes…" /> : null}
             {!loadingPending && pendingItems.length === 0 ? (
@@ -296,7 +316,7 @@ export function ConsignmentsPanel({ bridge, onBack, initialState }: Consignments
               <div className="consignments-review-block__header">
                 <div>
                   <h3 className="surface__title">Revisar liquidación</h3>
-                  <p className="surface__description">Chequeá importes y advertencias antes de confirmar el lote.</p>
+                  <p className="surface__description">Revisá los importes antes de confirmar esta liquidación.</p>
                 </div>
                 <Badge tone="info">Paso previo</Badge>
               </div>
@@ -309,8 +329,8 @@ export function ConsignmentsPanel({ bridge, onBack, initialState }: Consignments
               {warningItems.length > 0 ? (
                 <Banner
                   tone="warning"
-                  title="Hay ventas con pago parcial"
-                  message="Podés seguir, pero conviene revisar cuánto se cobró al cliente y cuánto queda pendiente antes de cerrar esta liquidación."
+                  title="Atención: hay ventas con pago parcial"
+                  message="Podés continuar, pero antes conviene mirar cuánto pagó el cliente y cuánto falta cobrar."
                 >
                   <ul className="list consignments-warning-list">
                     {warningItems.map((item) => (
@@ -332,10 +352,10 @@ export function ConsignmentsPanel({ bridge, onBack, initialState }: Consignments
                 </Banner>
               ) : null}
               <div className="grid-2">
-                <Field label="Fecha de liquidación">
+                <Field label="Fecha de liquidación" helper="Usá la fecha en que hacés esta liquidación.">
                   <input className="input" type="date" value={liquidationDate} onChange={(event) => setLiquidationDate(event.target.value)} />
                 </Field>
-                <Field label="Nota opcional">
+                <Field label="Nota opcional" helper="Solo si necesitás dejar una aclaración.">
                   <input className="input" value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Ej: Primera quincena" />
                 </Field>
               </div>
@@ -510,49 +530,6 @@ function MetricLine({ label, value }: { label: string; value: string }): JSX.Ele
       <span className="consignments-metric-line__value">{value}</span>
     </p>
   );
-}
-
-function buildStages({
-  view,
-  showConfirmBlock,
-  successBatch
-}: {
-  view: View;
-  showConfirmBlock: boolean;
-  successBatch: ConfirmConsignmentBatchResult | null;
-}): Array<{ label: string; hint: string; tone: StageTone }> {
-  return [
-    {
-      label: 'Pendientes',
-      hint: 'Seleccionar artículos',
-      tone: view === 'pending' && !showConfirmBlock ? 'current' : showConfirmBlock || Boolean(successBatch) ? 'complete' : 'idle'
-    },
-    {
-      label: 'Revisar liquidación',
-      hint: 'Chequeo previo',
-      tone: showConfirmBlock ? 'current' : successBatch ? 'complete' : 'idle'
-    },
-    {
-      label: 'Confirmar liquidación',
-      hint: 'Registrar el lote',
-      tone: successBatch ? 'complete' : 'idle'
-    },
-    {
-      label: 'Resultado',
-      hint: 'Resumen y exportación',
-      tone: successBatch ? 'current' : 'idle'
-    },
-    {
-      label: 'Historial',
-      hint: 'Lotes confirmados',
-      tone: view === 'history' ? 'current' : 'idle'
-    },
-    {
-      label: 'Detalle',
-      hint: 'Trazabilidad por artículo',
-      tone: view === 'detail' ? 'current' : 'idle'
-    }
-  ];
 }
 
 function formatSaleStatusLabel(status?: PendingConsignmentItem['saleStatus']): string {

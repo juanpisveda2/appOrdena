@@ -471,6 +471,14 @@ export function getAvailableSalesSearchResults(searchResults: CatalogSearchResul
   return searchResults.filter((product) => !product.isOutOfStock && product.availableQuantity > 0);
 }
 
+export function getDraftQuantityForProduct(draftItems: SalesDraftItem[], reusableProductId: number): number {
+  return draftItems.find((item) => item.reusableProductId === reusableProductId)?.quantity ?? 0;
+}
+
+export function getDraftTotalQuantity(draftItems: SalesDraftItem[]): number {
+  return draftItems.reduce((sum, item) => sum + item.quantity, 0);
+}
+
 function mergeDraftItem(current: SalesDraftItem[], detail: CatalogProductDetail): SalesDraftItem[] {
   const existing = current.find((item) => item.reusableProductId === detail.reusableProductId);
 
@@ -512,20 +520,12 @@ function mergeDraftItem(current: SalesDraftItem[], detail: CatalogProductDetail)
   );
 }
 
-function resetAfterConfirmation(current: SalesState, sale: SaleSnapshot, message: string): SalesState {
+function resetAfterConfirmation(message: string): SalesState {
   return {
     ...createInitialSalesState(),
-    view: 'detail',
-    detailOrigin: 'draft',
+    view: 'history',
     submitStatus: 'idle',
-    submitMessage: message,
-    currentSale: sale,
-    detailPayment: {
-      amount: '',
-      paymentMethod: 'cash',
-      note: ''
-    },
-    cancellationReason: ''
+    submitMessage: message
   };
 }
 
@@ -541,8 +541,7 @@ function hasOngoingDraft(state: SalesState): boolean {
 }
 
 export function createSalesActions({ bridge, getState, setState }: SalesActionDependencies) {
-  const loadHistory = async (): Promise<void> => {
-    const query = getState().historyQuery.trim();
+  const loadHistory = async (query = getState().historyQuery.trim()): Promise<void> => {
 
       setState((current) => ({
         ...current,
@@ -900,9 +899,8 @@ export function createSalesActions({ bridge, getState, setState }: SalesActionDe
       try {
         const sale = await bridge.sales.confirmDraft(request);
 
-        setState((current) =>
-          resetAfterConfirmation(current, sale, `La venta #${sale.saleNumber} quedó confirmada.`)
-        );
+        setState(resetAfterConfirmation(`La venta #${sale.saleNumber} quedó confirmada.`));
+        await loadHistory('');
       } catch (error) {
         setState((current) => ({
           ...current,

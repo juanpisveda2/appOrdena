@@ -501,10 +501,55 @@ describe('ConsignmentsPanel', () => {
       />
     );
 
-    expect(markup).toContain('etapas-liquidaciones');
     expect(markup).toContain('Revisar liquidación');
     expect(markup).toContain('Paso previo');
     expect(markup).toContain('Importe a pagar ahora');
     expect(markup).toContain('Saldo pendiente con el proveedor');
+    expect(markup).toContain('Cómo seguir');
+    expect(markup).toContain('Quitar todo');
+    expect(markup).toContain('Usá la fecha en que hacés esta liquidación.');
+  });
+
+  it('selects and clears all pending items from the dedicated bulk-selection action', async () => {
+    const bridge = createBridge();
+    const pendingItems = [
+      {
+        saleItemId: 10,
+        productName: 'Aros de plata',
+        saleNumber: 12,
+        saleDate: '2026-07-16T10:00:00.000Z',
+        buyerName: 'Ana',
+        amountCents: 90000,
+        gainCents: 30000
+      },
+      {
+        saleItemId: 11,
+        productName: 'Pulsera de plata',
+        saleNumber: 13,
+        saleDate: '2026-07-17T10:00:00.000Z',
+        buyerName: null,
+        amountCents: 80000,
+        gainCents: 20000
+      }
+    ];
+    bridge.consignments.listPendingItems = vi.fn().mockResolvedValue(pendingItems);
+
+    const view = await renderPanel({
+      bridge,
+      initialState: {
+        view: 'pending',
+        pendingItems
+      }
+    });
+
+    await view.clickButton('Seleccionar todo');
+    expect(view.container.textContent).toContain('2 artículos marcados.');
+    expect(view.getButton('Revisar liquidación').disabled).toBe(false);
+
+    await view.clickButton('Quitar todo');
+    expect(view.container.textContent).toContain('Todavía no marcaste ningún artículo.');
+    expect(view.getButton('Revisar liquidación').disabled).toBe(true);
+
+    await view.cleanup();
   });
 });

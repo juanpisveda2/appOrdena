@@ -8,6 +8,8 @@ import {
   canAssignCustomerForPaymentRecovery,
   createInitialSalesState,
   createSalesActions,
+  getDraftQuantityForProduct,
+  getDraftTotalQuantity,
   formatCurrencyFromCents,
   formatVariantLabel,
   getDraftItemBaseUnitPrice,
@@ -120,6 +122,16 @@ function renderGainPreviewText(
   return entries.map((entry) => `${entry.label}: ${formatCurrencyFromCents(entry.amountCents)}`).join(' · ');
 }
 
+function renderDraftQuantitySummary(quantity: number): string {
+  if (quantity === 0) {
+    return 'Todavía no agregaste productos a esta venta.';
+  }
+
+  return quantity === 1
+    ? 'Ya agregaste 1 unidad a esta venta.'
+    : `Ya agregaste ${quantity} unidades a esta venta.`;
+}
+
 export function SalesPanel({ bridge, entryPoint = 'draft', initialState, onBack }: SalesPanelProps): JSX.Element {
   const [state, setState] = useState<SalesState>(() => initialState ?? createInitialSalesState());
   const historyEntryAppliedRef = useRef(false);
@@ -168,6 +180,7 @@ export function SalesPanel({ bridge, entryPoint = 'draft', initialState, onBack 
   const visibleHistoryResults = getSalesHistoryPage(state.historyResults, currentHistoryPage, SALES_HISTORY_PAGE_SIZE);
   const visibleSearchResults = getAvailableSalesSearchResults(state.searchResults);
   const activePayments = state.currentSale?.payments.filter((payment) => payment.isActive) ?? [];
+  const draftTotalQuantity = getDraftTotalQuantity(state.draftItems);
 
   useEffect(() => {
     if (entryPoint !== 'history' || historyEntryAppliedRef.current) {
@@ -269,17 +282,37 @@ export function SalesPanel({ bridge, entryPoint = 'draft', initialState, onBack 
               <ul className="list sales-search-results">
                 {visibleSearchResults.map((product) => (
                   <li className="list-row list-row--catalog" key={product.reusableProductId}>
-                    <div className="list-row__content">
-                      <p className="list-row__title">
-                        {product.name} · {formatVariantLabel(product.variant)}
-                      </p>
-                      <p className="list-row__text">Stock disponible: {product.availableQuantity}</p>
-                    </div>
-                    <div className="list-row__aside">
-                      <Button type="button" variant="success" onClick={() => void actions.addProduct(product.reusableProductId)}>
-                        Sumar a la venta
-                      </Button>
-                    </div>
+                    {(() => {
+                      const addedQuantity = getDraftQuantityForProduct(state.draftItems, product.reusableProductId);
+
+                      return (
+                        <>
+                          <div className="list-row__content">
+                            <p className="list-row__title">
+                              {product.name} · {formatVariantLabel(product.variant)}
+                            </p>
+                            <p className="list-row__text">Stock disponible: {product.availableQuantity}</p>
+                            {addedQuantity > 0 ? (
+                              <div className="cluster sales-search-result-status">
+                                <Badge tone="success">Agregado</Badge>
+                                <p className="list-row__text">
+                                  En la venta: {addedQuantity} {addedQuantity === 1 ? 'unidad' : 'unidades'}
+                                </p>
+                              </div>
+                            ) : null}
+                          </div>
+                          <div className="list-row__aside">
+                            <Button
+                              type="button"
+                              variant={addedQuantity > 0 ? 'secondary' : 'success'}
+                              onClick={() => void actions.addProduct(product.reusableProductId)}
+                            >
+                              {addedQuantity > 0 ? '✓ Agregado' : 'Sumar a la venta'}
+                            </Button>
+                          </div>
+                        </>
+                      );
+                    })()}
                   </li>
                 ))}
               </ul>
@@ -475,6 +508,9 @@ export function SalesPanel({ bridge, entryPoint = 'draft', initialState, onBack 
                 ))}
               </dl>
             ) : null}
+            <p className="field__helper sales-cart-detail sales-cart-detail--highlight" style={{ marginTop: 12 }}>
+              {renderDraftQuantitySummary(draftTotalQuantity)}
+            </p>
             <div style={{ marginTop: 12 }}>
               <Button type="button" variant="success" onClick={() => actions.goToReview()}>
                 Seguir a revisión
@@ -637,9 +673,9 @@ export function SalesPanel({ bridge, entryPoint = 'draft', initialState, onBack 
                 </React.Fragment>
               ))}
             </dl>
-            <p className="field__helper" style={{ marginTop: 12 }}>
-              Cuando confirmes, la venta queda guardada y pasa a su detalle para seguir cobrando o revisar movimientos.
-            </p>
+              <p className="field__helper" style={{ marginTop: 12 }}>
+                Cuando confirmes, la venta queda guardada y volvés al historial para seguir desde la lista actualizada.
+              </p>
             <div className="actions" style={{ marginTop: 16 }}>
               <Button type="button" variant="secondary" onClick={() => actions.backToDraft()}>
                 Volver y ajustar

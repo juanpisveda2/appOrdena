@@ -4,8 +4,10 @@ import {
   buildConfirmConsignmentBatchRequest,
   createConsignmentActions,
   createInitialConsignmentsState,
+  getSelectablePendingIds,
   getCurrentBusinessDate,
   summarizeSelection,
+  toggleAllPendingSelections,
   togglePendingSelection,
   type ConsignmentsState
 } from '../../../src/renderer/features/consignments/model';
@@ -105,6 +107,9 @@ describe('consignments renderer model', () => {
     actions.toggleSelection(11);
 
     expect(togglePendingSelection([10], 10)).toEqual([]);
+    expect(getSelectablePendingIds(harness.getState().pendingItems)).toEqual([10, 11]);
+    expect(toggleAllPendingSelections([], harness.getState().pendingItems)).toEqual([10, 11]);
+    expect(toggleAllPendingSelections([10, 11], harness.getState().pendingItems)).toEqual([]);
     expect(summarizeSelection(harness.getState())).toMatchObject({
       count: 2,
       totalCents: 170000,

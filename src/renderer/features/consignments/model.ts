@@ -85,6 +85,20 @@ export function togglePendingSelection(selectedIds: number[], saleItemId: number
     : [...selectedIds, saleItemId];
 }
 
+export function getSelectablePendingIds(pendingItems: PendingConsignmentItem[]): number[] {
+  return pendingItems.map((item) => item.saleItemId);
+}
+
+export function toggleAllPendingSelections(selectedIds: number[], pendingItems: PendingConsignmentItem[]): number[] {
+  const selectableIds = getSelectablePendingIds(pendingItems);
+
+  if (selectableIds.length === 0) {
+    return [];
+  }
+
+  return selectableIds.every((saleItemId) => selectedIds.includes(saleItemId)) ? [] : selectableIds;
+}
+
 export function summarizeSelection(state: ConsignmentsState): ConsignmentSelectionSummary {
   const sourceItems: ConsignmentLiquidationSourceItem[] = state.pendingItems.map((item) => ({
     saleItemId: item.saleItemId,

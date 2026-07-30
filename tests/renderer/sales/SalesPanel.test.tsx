@@ -83,7 +83,10 @@ describe('SalesPanel', () => {
 
     expect(markup).toContain('Ventas');
     expect(markup).toContain('1. Buscar y agregar productos');
-    expect(markup).toContain('Sumar a la venta');
+    expect(markup).not.toContain('1 unidad agregada a la venta.');
+    expect(markup).toContain('Agregado');
+    expect(markup).toContain('En la venta: 1 unidad');
+    expect(markup).toContain('✓ Agregado');
     expect(markup).toContain('2. Armar venta');
     expect(markup).toContain('Sacar');
     expect(markup).toContain('3. Cliente y pago inicial');
@@ -99,6 +102,7 @@ describe('SalesPanel', () => {
     expect(markup).toContain('Ganancia producto');
     expect(markup).not.toContain('Ganancia total');
     expect(markup).toContain('Cierre rápido antes de revisar');
+    expect(markup).toContain('Ya agregaste 1 unidad a esta venta.');
     expect(markup).toContain('Seguir a revisión');
   });
 
@@ -243,6 +247,164 @@ describe('SalesPanel', () => {
 
     expect(markup).toContain('Aros de plata');
     expect(markup).not.toContain('Anillo sin stock');
+  });
+
+  it('switches the add CTA into an added state and shows the visible quantity after adding a product', async () => {
+    const bridge = createBridge();
+    vi.mocked(bridge.catalog.getProductDetail).mockResolvedValue({
+      reusableProductId: 1,
+      category: 'jewelry',
+      name: 'Aros de plata',
+      description: null,
+      material: 'Plata',
+      variant: '18 mm',
+      availableQuantity: 3,
+      currentCashPriceCents: 120000,
+      currentListPriceCents: 125000,
+      currentProfitPercentageBasisPoints: 1000,
+      currentCashExpectedProfitCents: 12000,
+      currentListExpectedProfitCents: 12500,
+      currentPersonalizationExpectedProfitCents: null,
+      currentCashTotalExpectedProfitCents: 12000,
+      currentListTotalExpectedProfitCents: 12500,
+      recentIntakes: []
+    });
+    const state = createInitialSalesState();
+    state.searchStatus = 'ready';
+    state.searchResults = [
+      {
+        reusableProductId: 1,
+        category: 'jewelry',
+        name: 'Aros de plata',
+        material: 'Plata',
+        variant: '18 mm',
+        availableQuantity: 3,
+        isOutOfStock: false
+      }
+    ];
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(<SalesPanel bridge={bridge} initialState={state} />);
+      await Promise.resolve();
+    });
+
+    const addButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Sumar a la venta');
+    if (!(addButton instanceof HTMLButtonElement)) {
+      throw new Error('Add button not found');
+    }
+
+    await act(async () => {
+      addButton.click();
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain('Agregado');
+    expect(container.textContent).toContain('En la venta: 1 unidad');
+    expect(container.textContent).toContain('Ya agregaste 1 unidad a esta venta.');
+    expect(container.textContent).toContain('✓ Agregado');
+
+    await act(async () => {
+      root.unmount();
+      await Promise.resolve();
+    });
+  });
+
+  it('redirects to sales history after confirming and keeps the success feedback visible', async () => {
+    const bridge = createBridge();
+    vi.mocked(bridge.sales.confirmDraft).mockResolvedValue({
+      saleId: 7,
+      saleNumber: 12,
+      saleDate: '2026-07-16T10:00:00.000Z',
+      status: 'partial_payment',
+      totalCents: 120000,
+      paidCents: 20000,
+      balanceCents: 100000,
+      cancellationReason: null,
+      customer: {
+        customerId: 1,
+        name: 'Ana',
+        phoneText: '3510000000',
+        note: null
+      },
+      items: [],
+      payments: [],
+      totalProfitCents: 30000,
+      canRegisterPayment: true,
+      canCancelSale: true
+    });
+    vi.mocked(bridge.sales.listHistory).mockResolvedValue([
+      {
+        saleId: 7,
+        saleNumber: 12,
+        saleDate: '2026-07-16T10:00:00.000Z',
+        status: 'partial_payment',
+        totalCents: 120000,
+        paidCents: 20000,
+        balanceCents: 100000,
+        customerName: 'Ana',
+        customerPhoneText: '3510000000',
+        totalProfitCents: 30000
+      }
+    ]);
+
+    const state = createInitialSalesState();
+    state.view = 'review';
+    state.draftItems = [
+      {
+        reusableProductId: 1,
+        name: 'Aros de plata',
+        material: 'Plata',
+        variant: '18 mm',
+        availableQuantity: 2,
+        cashPriceCents: 120000,
+        listPriceCents: 125000,
+        cashExpectedProfitCents: 12000,
+        listExpectedProfitCents: 12500,
+        personalizationExpectedProfitCents: null,
+        quantity: 1,
+        priceType: 'cash'
+      }
+    ];
+    state.customer.name = 'Ana';
+    state.customer.phoneText = '3510000000';
+    state.initialPayment.amount = '200';
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(<SalesPanel bridge={bridge} initialState={state} />);
+      await Promise.resolve();
+    });
+
+    const confirmButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent?.trim() === 'Confirmar y guardar venta'
+    );
+    if (!(confirmButton instanceof HTMLButtonElement)) {
+      throw new Error('Confirm button not found');
+    }
+
+    await act(async () => {
+      confirmButton.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(bridge.sales.confirmDraft).toHaveBeenCalled();
+    expect(bridge.sales.listHistory).toHaveBeenCalledWith({ query: '', limit: 60 });
+    expect(container.textContent).toContain('Historial de ventas');
+    expect(container.textContent).toContain('La venta #12 quedó confirmada.');
+    expect(container.textContent).not.toContain('Resumen confirmado');
+
+    await act(async () => {
+      root.unmount();
+      await Promise.resolve();
+    });
   });
 
   it('hides zero balances across history and confirmed detail views', () => {
